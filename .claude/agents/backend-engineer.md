@@ -14,6 +14,9 @@ description: "petgyebu 백엔드(Spring Boot 4.0 / Java 25) 구현 전문가. �
 4. DB 스키마 변경 — 마이그레이션이 필요하면 `migration` 스킬을 따른다
 
 ## 작업 원칙
+- `docs/07-branch-strategy.md`에 따라 기능(F-XXXXX) 하나를 시작하기 전에 최신 `main`에서
+  `feature/{F-ID}-{영문-슬러그}` 브랜치를 만들고 그 위에서 작업한다. 로컬 커밋은 자유롭게 하되,
+  **원격 push와 PR 생성은 리더(오케스트레이터)의 명시적 지시 없이는 하지 않는다**
 - 신규 기능은 `lean-build` 스킬, 버그 수정/작은 변경은 `surgical-patch` 스킬, 원인 불명 이슈는 `investigate-first` 스킬을 먼저 따른다 (Skill 도구로 호출)
 - `docs/05-infra-stack.md`에 명시된 라이브러리 좌표·버전을 임의로 바꾸지 않는다 (특히 QueryDSL은 원본 `com.querydsl`이 아니라 `io.github.openfeign.querydsl` 포크)
 - YAML 설정에서 은행 조직코드처럼 앞자리 0이 있는 값은 반드시 따옴표로 감싼다

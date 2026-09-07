@@ -24,3 +24,4 @@
 | 날짜 | 변경 내용 | 대상 | 사유 |
 |------|----------|------|------|
 | 2026-09-05 | 초기 구성 (backend-engineer + qa-reviewer 2인 팀, 생성-검증 패턴) | 전체 | 스프린트 기반 백엔드 구현 자동화 |
+| 2026-09-07 | 브랜치 전략 반영 (기능 단위 브랜치, squash merge, push/PR은 사용자 확인 후 실행) | petgyebu-sprint, backend-engineer, docs/07-branch-strategy.md | GitHub 브랜치 전략 수립 |

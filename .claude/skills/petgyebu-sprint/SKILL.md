@@ -11,7 +11,7 @@ description: >
 # petgyebu Sprint Orchestrator
 
 `docs/06-sprint-plan.md`에 정의된 스프린트 순서를 backend-engineer(구현)와 qa-reviewer(검증)
-2인 팀으로 실행하는 오케스트레이터.
+2인 팀으로 실행하는 오케스트레이터. 브랜치/PR 규칙은 `docs/07-branch-strategy.md` 참고.
 
 ## 실행 모드: 에이전트 팀
 
@@ -45,6 +45,8 @@ SendMessage로 직접 수정 요청을 주고받아 왕복 비용을 줄인다.
 2. 관련 기능 ID(F-XXXXX)가 있으면 `docs/02-requirements-features.md`에서 해당 상세 명세 로드
 3. Sprint 0(인프라)이면 `docs/05-infra-stack.md`의 확정 스택/버전 표도 함께 로드
 4. `_workspace/{sprint}_00_input.md`에 추출한 항목·명세·완료 기준을 정리해 저장
+5. `docs/07-branch-strategy.md` 기준으로 이번 스프린트에서 만들 기능 브랜치 목록을 정한다
+   (기능 ID 하나당 `feature/{F-ID}-{슬러그}` 하나, 병렬 기능은 각자 별도 브랜치)
 
 ### Phase 2: 팀 구성
 
@@ -80,7 +82,8 @@ TaskCreate(tasks: [
 
 **실행 방식:** 팀원이 자체 조율. 리더는 진행 상황을 모니터링한다.
 
-1. backend-engineer가 작업 목록에서 항목을 순서대로 처리
+1. backend-engineer가 기능(F-ID) 시작 시 `main`에서 `feature/{F-ID}-{슬러그}` 브랜치를 만들고
+   그 위에서 작업 목록 항목을 순서대로 처리, 로컬 커밋(Conventional Commits 형식)
 2. 모듈(엔티티+API 한 세트, 또는 배치 잡 하나) 완성 시마다 qa-reviewer에게 SendMessage
 3. qa-reviewer는 "양쪽 동시 읽기"로 즉시 검증 후 판정:
    - PASS → 다음 모듈 진행
@@ -99,7 +102,11 @@ TaskCreate(tasks: [
 1. 모든 작업 완료 대기 (TaskGet)
 2. `_workspace/{sprint}_qa_report.md`, `_workspace/{sprint}_backend_summary.md` Read
 3. `docs/06-sprint-plan.md`의 해당 스프린트 체크박스를 완료 항목만 `[x]`로 갱신 (보류/미검증 항목은 그대로 둠)
-4. 사용자에게 요약 보고: 완료 항목 수, FIX 반영 수, 보류/미검증 항목과 사유, 다음 스프린트 진입 가능 여부
+4. PASS한 기능 브랜치마다 PR 제목(Conventional Commits 형식)·본문 초안을 준비한다.
+   **원격 push, PR 생성, 병합은 사용자에게 결과를 보고하고 명시적으로 확인받은 뒤에만 실행한다**
+   (`docs/07-branch-strategy.md`: squash merge만 사용, PR 제목이 곧 squash 커밋 메시지가 됨)
+5. 스프린트의 모든 브랜치가 병합되어 스프린트가 완전히 끝났으면 `v0.{N}.0` 태그 생성을 사용자에게 제안한다
+6. 사용자에게 요약 보고: 완료 항목 수, FIX 반영 수, 보류/미검증 항목과 사유, 생성된 브랜치/PR 목록, 다음 스프린트 진입 가능 여부
 
 ### Phase 5: 정리
 
