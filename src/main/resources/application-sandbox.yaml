@@ -1,0 +1,8 @@
+spring:
+  application:
+    name: telo
+
+codef:
+  service-type: SANDBOX
+  client-id: ${SANDBOX_CLIENT_ID}
+  client-secret: ${SANDBOX_CLIENT_SECRET}

@@ -1,0 +1,8 @@
+spring:
+  application:
+    name: telo
+
+codef:
+  service-type: DEMO
+  client-id: ${DEMO_CLIENT_ID}
+  client-secret: ${DEMO_CLIENT_SECRET}
