@@ -357,3 +357,57 @@ QA가 실재한다고 확인한 문제 두 건이다. 지금은 의도된 동작
 - QueryDSL 쿼리 실행 검증 (엔티티가 Sprint 1 범위)
 - 코드에프 실제 API 호출 (자격증명·데모 승인 없음)
 - Sprint 0의 나머지 항목(User 엔티티, 소셜 로그인, 토큰 정책, 동의 기록, 탈퇴 API)은 입력 문서에서 이번 범위 밖으로 명시됐다. 따라서 이번 작업은 Sprint 0 완료 판정이 아니라 부분 진행이다.
+
+## 15. Flyway 도입과 네이밍 통일 (2026-09-15 추가)
+
+backend-engineer가 이 작업 도중 사용량 한도로 중단돼, 남은 검증과 커밋은 리더가 마무리했다. 변경 자체는 backend-engineer가 작성한 것이고 리더는 실행 검증과 문서 정리만 했다.
+
+### Spring Boot 4.0에서 Flyway가 조용히 실행되지 않는 문제
+
+`org.flywaydb:flyway-core`만 넣으면 Flyway가 **아무것도 하지 않는다.** 예외도 경고도 없이 그냥 마이그레이션이 일어나지 않는다. Spring Boot 4.0이 자동설정을 모듈 단위로 쪼개면서 `FlywayAutoConfiguration`이 별도 아티팩트로 빠졌기 때문이다.
+
+```groovy
+implementation 'org.springframework.boot:spring-boot-flyway'   // 이게 있어야 자동설정이 붙는다
+implementation 'org.flywaydb:flyway-core'
+runtimeOnly 'org.flywaydb:flyway-database-postgresql'
+```
+
+QueryDSL classifier 문제와 성질이 같다. 빌드도 기동도 성공하는데 기능만 조용히 빠져 있어서, 실제로 마이그레이션을 걸어보기 전까지는 모른다. Spring Boot 4.0으로 올라오면서 생긴 함정이므로 다른 자동설정 의존 기능(Batch, Redis 등)을 추가할 때도 같은 확인이 필요하다.
+
+### PostgreSQL 대상 실행 검증 (리더 수행)
+
+`docker build` 후 `postgres:16-alpine` 컨테이너를 붙여 실제로 확인했다.
+
+```
+FlywayExecutor  : Database: jdbc:postgresql://telo-pg:5432/telodb (PostgreSQL 16.15)
+JdbcTableSchemaHistory : Schema history table "public"."flyway_schema_history" does not exist yet
+Flyway : All configured schemas are empty; baseline operation skipped.
+JdbcTableSchemaHistory : Creating Schema History table "public"."flyway_schema_history" ...
+```
+
+DB 상태도 직접 확인했다. `\dt` 결과 `flyway_schema_history` 테이블 1개가 생성됐고, 내용은 0행이다. 마이그레이션 파일이 아직 없으므로 정상이다. `ddl-auto: validate` 상태에서 엔티티가 없어 검증도 통과했고, 헬스체크는 HTTP 200 `{"status":"UP"}`을 반환했다.
+
+이 검증 과정에서 이전 실행의 컨테이너가 같은 포트를 점유한 채 남아 있어 헬스체크 200이 **다른 컨테이너의 응답**이었던 경우가 한 번 있었다. 포트를 바꿔 재실행해 확인했다. 컨테이너 검증을 할 때는 응답이 정말 이번에 띄운 컨테이너에서 나온 것인지 확인해야 한다.
+
+### 프로필별 스키마 관리 방식
+
+| 프로필 | DB | 스키마 생성 주체 | Flyway |
+|---|---|---|---|
+| 운영·컨테이너 | PostgreSQL 16 | Flyway | 활성 |
+| `local` | H2 | Hibernate `create-drop` | 비활성 |
+
+`local`에서 Flyway를 끈 이유는 마이그레이션이 JSONB·GIN 인덱스 등 PostgreSQL 전용 문법을 쓸 예정이라(R-CCOEWW의 가맹점명 키워드 룰 테이블) H2에서 그대로 돌릴 수 없기 때문이다. 마이그레이션의 실제 검증은 PostgreSQL 대상으로만 한다.
+
+운영 프로필의 `ddl-auto`는 `validate`로 고정했다. `update`를 쓰면 금융 거래 테이블이 배포 때마다 예고 없이 바뀔 수 있다.
+
+### Spring Batch 메타 테이블
+
+`spring.batch.jdbc.initialize-schema: never`로 두고 `BATCH_*` 테이블도 Flyway로 관리한다. 스키마 생성 경로를 하나로 통일하는 편이 추적과 롤백에 유리하다. 실제 마이그레이션은 배치 잡이 처음 들어오는 Sprint 6에 작성하면 되지만, Sprint 1의 첫 마이그레이션과 함께 넣어도 무방하다.
+
+### 마이그레이션 파일 이름 규칙
+
+`V{YYYYMMDDHHmm}__{snake_case_설명}.sql` 형식을 쓴다. 순번(`V1`, `V2`) 대신 타임스탬프를 쓰는 이유는 `docs/07-branch-strategy.md`대로 기능마다 브랜치를 따로 파고 Sprint 3처럼 병렬 진행하는 구간이 있어서, 순번을 쓰면 두 브랜치가 같은 번호를 잡아 병합 시 충돌하기 때문이다. 상세는 `src/main/resources/db/migration/README.md` 참고.
+
+### 네이밍 통일
+
+문서의 `com.budgetpet`/`budget-pet-api`가 아니라 실제 코드 기준인 `com.petgyebu`/`telo`로 통일했다. 변경량이 가장 적은 방향이다. `scripts/deploy-cloud-run.sh`, `scripts/verify-cloud-run-flags.sh`, `.github/workflows/ci.yml`의 서비스명 기본값을 `telo`로 바꿨고, `grep -ri 'budget-pet'`로 코드·스크립트·CI에 잔존이 없음을 확인했다. `docs/05-infra-stack.md` 쪽 반영은 리더가 처리했다.
