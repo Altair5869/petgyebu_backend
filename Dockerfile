@@ -19,8 +19,9 @@ FROM eclipse-temurin:25-jre AS runtime
 WORKDIR /app
 
 RUN groupadd --system app && useradd --system --gid app --home-dir /app app
-COPY --from=build /workspace/build/libs/*-SNAPSHOT.jar /app/app.jar
-RUN chown -R app:app /app
+# chown은 COPY에서 처리한다. RUN chown -R로 하면 OverlayFS가 jar 전체를 새 레이어에 복제해
+# 이미지가 jar 크기만큼 더 커진다.
+COPY --from=build --chown=app:app /workspace/build/libs/*-SNAPSHOT.jar /app/app.jar
 USER app
 
 # Cloud Run은 PORT 환경변수로 수신 포트를 지정한다.

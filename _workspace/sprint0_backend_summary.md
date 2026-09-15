@@ -15,6 +15,7 @@
 - [완료] QueryDSL annotationProcessor 검증: Q클래스 생성 확인. classifier가 필요하다는 사실을 확인했고, 검증용 샘플 엔티티는 확인 후 제거했다.
 - [완료] easycodef-java JDK 25 호환성 검증: `src/test/java/com/petgyebu/telo/codef/EasyCodefUtilJdk25Test.java`
 - [완료] 문서 외 의존성 3건 처리(리더 확인 후): `build.gradle`, `Dockerfile` — spring-ai 제거, spring-boot-devtools 제거, springdoc 유지
+- [완료] QA 지적 FIX 3건 반영: `src/main/java/com/petgyebu/telo/config/SecurityConfig.java`, `src/main/java/com/petgyebu/telo/TeloApplication.java`, `Dockerfile`, `.dockerignore` — 12장 참고
 
 ## 1. 의존성 정리와 빌드
 
@@ -47,7 +48,7 @@ BUILD SUCCESSFUL in 10s
 
 ## 2. 헬스체크
 
-Actuator가 이미 의존성에 있으므로 컨트롤러를 새로 만들지 않았다. 남은 문제는 `spring-boot-starter-security`가 기본적으로 모든 요청에 인증을 걸어 `/actuator/health`가 401이 된다는 점뿐이었다. 그래서 `SecurityConfig`에 필터 체인 하나만 두고 `/actuator/health`와 그 하위 경로만 `permitAll`, 나머지는 `authenticated`로 뒀다. 실제 인증 규칙은 소셜 로그인 작업에서 채운다.
+Actuator가 이미 의존성에 있으므로 컨트롤러를 새로 만들지 않았다. 남은 문제는 `spring-boot-starter-security`가 기본적으로 모든 요청에 인증을 걸어 `/actuator/health`가 401이 된다는 점뿐이었다. 그래서 `SecurityConfig`에 필터 체인 하나만 두고 `/actuator/health`와 그 하위 경로만 `permitAll`, 나머지는 `authenticated`로 뒀다. 실제 인증 규칙은 소셜 로그인 작업에서 채운다. (이 체인의 초기 버전에 있던 HTTP Basic·CSRF·세션 문제는 QA 지적으로 12장에서 정리했다.)
 
 ## 3. 외부 인프라 없이 로컬 기동 — 택한 방식과 근거
 
@@ -80,6 +81,8 @@ $ curl -s -o /tmp/health.json -w '%{http_code}' http://localhost:8080/actuator/h
 H2는 `developmentOnly`라 `bootJar`에 들어가지 않는다. 이는 런타임 이미지의 파일 목록이 아니라 jar 내용으로 확인했다(위 3번). `spring-boot-devtools`도 같은 구조라 원래부터 제외됐고, 10장에서 의존성 자체를 제거했다.
 
 Cloud Run이 주입하는 `PORT`를 `-Dserver.port=${PORT}`로 받도록 엔트리포인트를 잡았다.
+
+파일 소유권은 `COPY --chown`으로 넘긴다. 초기 버전은 `RUN chown -R`을 썼는데 이미지가 jar 크기만큼 부풀었다. 자세한 것은 12장이다. 빌드 컨텍스트 축소를 위한 `.dockerignore`도 12장에서 추가했다.
 
 ## 5. Cloud Run 배포 스크립트
 
@@ -234,7 +237,119 @@ $ curl -s -o /tmp/h2.json -w '%{http_code}' http://localhost:8080/actuator/healt
 - `docs/05-infra-stack.md` 7장의 `spring-boot-starter-aop` 표기와 QueryDSL classifier 미기재 두 군데는 실제와 다르다. 문서 수정은 리더 판단에 맡긴다.
 - 문서 3.1절의 프로젝트 메타데이터는 Group `com.budgetpet` / Artifact `budget-pet-api`인데, 실제 저장소는 `com.petgyebu` / `telo`다. 배포 스크립트의 서비스명 기본값은 문서 쪽(`budget-pet-api`)에 맞췄다. 어느 쪽으로 통일할지 결정이 필요하다.
 
-## 11. 이번 실행에서 못 한 것
+## 12. QA 지적 반영 (FIX 3건)
+
+`_workspace/sprint0_qa_report.md`에서 FIX 3건이 나왔다. REDO는 없었다. 세 건 모두 반영했다.
+
+### FIX 1 — HTTP Basic 제거
+
+`SecurityConfig`에 있던 `.httpBasic(basic -> {})`을 지웠다. 이게 켜져 있으면 Spring Boot가 자동 생성하는 `user` 계정이 살아 있는 자격증명이 되고, 그 비밀번호가 표준출력에 찍혀 Cloud Run에서는 Cloud Logging에 그대로 남는다. Basic 인증을 쓸 소비자가 이 프로젝트에 없다.
+
+다만 `.httpBasic()`만 지워서는 부족했다. 실제로 돌려 보니 `Using generated security password:` 로그가 그대로 남았다. `UserDetailsServiceAutoConfiguration`은 HTTP Basic 설정과 무관하게 `UserDetailsService` 빈이 없으면 무조건 인메모리 계정을 만들기 때문이다. 자격증명으로 인증에 성공하지는 않게 됐지만(401 확인) 비밀번호가 로그에 남는 문제는 그대로였다.
+
+그래서 `TeloApplication`에서 이 자동설정을 제외했다.
+
+```java
+@SpringBootApplication(exclude = UserDetailsServiceAutoConfiguration.class)
+```
+
+Spring Boot 4.0에서 이 클래스의 위치는 `org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration`이다(`spring-boot-security-4.0.8.jar`에서 확인). 인증 방식이 무상태 JWT로 확정된 이상 인메모리 계정 자체가 불필요하므로 제외가 맞는 처리다.
+
+### FIX 2 — CSRF 비활성화 + 세션 STATELESS
+
+기본값(CSRF on, 세션 `IF_REQUIRED`)이라 인증되지 않은 요청에도 `JSESSIONID`가 발급되고 있었다. Q4에서 확정한 무상태 JWT(액세스 30분 / 리프레시 14일 회전)와 충돌한다. 체인에 두 줄을 넣었다.
+
+```java
+.csrf(csrf -> csrf.disable())
+.sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+```
+
+여기서 한 가지 부작용이 있었다. HTTP Basic을 빼면 인증 수단이 하나도 없는 상태가 되고, 그러면 Spring Security의 기본 엔트리포인트가 `Http403ForbiddenEntryPoint`라 보호된 경로가 401이 아니라 403을 낸다. QA가 요구한 401을 유지하려고 엔트리포인트를 명시했다.
+
+```java
+.exceptionHandling(handling -> handling
+        .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
+```
+
+이건 JWT 필터가 들어올 Sprint 1에서도 그대로 쓰는 구성이다.
+
+### FIX 3 — Dockerfile `chown` 레이어 제거 + `.dockerignore` 추가
+
+`RUN chown -R app:app /app`을 지우고 `COPY --from=build --chown=app:app ...` 형태로 바꿨다. `RUN chown -R`은 메타데이터만 바꾸는 것처럼 보이지만 OverlayFS에서는 변경된 파일 전체가 새 레이어에 복사돼, 145MB짜리 jar가 이미지에 두 번 저장되고 있었다.
+
+`.dockerignore`도 새로 만들어 `.git`, `build`, `.gradle`, `.idea`, `_workspace`, `docs`, `*.md`를 뺐다.
+
+### 검증 출력
+
+빌드:
+
+```
+$ ./gradlew build --console=plain
+BUILD SUCCESSFUL in 5s
+테스트 2건 모두 failures="0" errors="0"
+```
+
+기동 로그에서 자동 생성 비밀번호가 사라졌다.
+
+```
+$ grep -c "Using generated security password" /tmp/bootrun4.log
+0
+```
+
+경로별 상태코드(인증 헤더 없음):
+
+```
+/actuator/health             200
+/actuator/health/liveness    200
+/actuator                    401
+/actuator/env                401
+/v3/api-docs                 401
+/swagger-ui/index.html       401
+/foo                         401
+```
+
+세션 쿠키와 Basic 광고 헤더가 모두 사라졌다.
+
+```
+$ curl -sD - -o /dev/null http://localhost:8080/foo | grep -i 'set-cookie\|www-authenticate'
+(없음)
+```
+
+FIX 1 적용 직후(자동설정 제외 전) 자동 생성 계정으로 인증을 시도했을 때도 401이 나왔다. 즉 Basic 경로 자체가 닫혔다.
+
+이미지 크기:
+
+```
+$ docker image inspect telo:sprint0 --format '{{.Size}}'     # 수정 전
+672199479
+$ docker image inspect telo:sprint0fix --format '{{.Size}}'  # 수정 후
+527218787
+
+$ docker history telo:sprint0fix --format '{{.Size}}\t{{.CreatedBy}}'
+145MB   COPY --chown=app:app /workspace/build/libs/*…
+4.71kB  RUN /bin/sh -c groupadd --system app && user…
+```
+
+672MB에서 527MB로 줄었다. QA가 예측한 수치와 일치한다. `chown` 레이어가 이력에서 사라졌다.
+
+컨테이너 헬스체크(postgres 사이드카):
+
+```
+health HTTP 200
+{"groups":["liveness","readiness"],"status":"UP"}
+env HTTP 401
+generated password 건수: 0
+```
+
+## 13. GCP 프로비저닝 시점에 함께 처리할 것 (지금 고치지 않음)
+
+QA가 실재한다고 확인한 문제 두 건이다. 지금은 의도된 동작이라 손대지 않았지만, GCP를 붙이는 작업과 반드시 묶어서 처리해야 한다.
+
+**CI가 자격증명이 없으면 조용히 초록색으로 끝난다.** `deploy` 잡의 조건은 `github.ref == 'refs/heads/main'`뿐이라, 자격증명이 없으면 `creds` 스텝이 `available=false`를 내보내고 이후 다섯 스텝이 전부 스킵되며 잡은 성공으로 끝난다. 프로비저닝 전인 지금은 이게 맞는 동작이다. 그러나 **GCP가 붙은 뒤에 시크릿이 지워지거나 만료되면 배포도 플래그 검증도 조용히 사라지는데 CI는 계속 초록색이다.** Sprint 0의 목적이 "플래그가 리셋되면 빌드가 깨지게 만드는 것"인데 정확히 반대로 동작하게 된다. 처리 방법은 `.github/workflows/ci.yml`의 `Check GCP credentials` 스텝에서 `else` 분기를 `exit 1`로 바꾸는 것이다. 또는 `vars.DEPLOY_ENABLED` 같은 저장소 변수로 명시적으로 켜고 끄는 구조로 바꾼다.
+
+**검증 스크립트가 서비스의 희망 상태만 본다.** `scripts/verify-cloud-run-flags.sh`는 `spec.template.metadata.annotations`를 읽는데, 이건 다음 리비전에 적용될 템플릿이지 실제로 트래픽을 받는 리비전의 상태가 아니다. 배포가 부분적으로 실패해 새 리비전이 Ready가 되지 못하면, 템플릿은 올바른데 살아 있는 리비전은 플래그 없이 도는 상황을 통과시킬 수 있다. 처리 방법은 `status.latestReadyRevisionName`을 함께 확인하거나 그 리비전을 `gcloud run revisions describe`로 다시 조회해 애노테이션을 대조하는 것이다. 애노테이션 키 이름 자체가 아직 실물로 확인되지 않았으므로(아래 14장) 어차피 첫 배포에서 이 스크립트를 손봐야 한다.
+
+## 14. 이번 실행에서 못 한 것
 
 - Cloud Run 실제 배포와 `gcloud run services describe` 실출력 검증 (GCP 계정 없음)
 - Upstash Redis 연결 검증 (계정 없음). `local` 프로필에서는 Redis 헬스 인디케이터를 꺼둔 상태다
