@@ -1,3 +1,22 @@
 spring:
   application:
     name: telo
+
+  jpa:
+    hibernate:
+      # 스키마는 Flyway가 만든다. Hibernate는 엔티티와 실제 테이블이 맞는지 검증만 한다.
+      # update/create를 쓰면 금융 거래 테이블이 배포 때마다 예고 없이 바뀔 수 있다.
+      ddl-auto: validate
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    # 이미 테이블이 있는 DB에 Flyway를 붙일 때를 대비한 설정. 빈 DB에서는 영향이 없다.
+    baseline-on-migrate: true
+    baseline-version: 0
+
+  batch:
+    jdbc:
+      # BATCH_* 메타 테이블도 Flyway로 관리한다. 근거는
+      # _workspace/sprint0_backend_summary.md 15장 참고.
+      initialize-schema: never
