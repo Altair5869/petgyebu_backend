@@ -1,7 +1,7 @@
 # 브랜치 전략
 
 - 관련 프로젝트: 반려동물 감정 기반 소비 관리 가계부 앱 백엔드
-- 최종 갱신: 2026-09-07
+- 최종 갱신: 2026-09-15 (GitHub 저장소 설정 적용 상태 반영)
 - 관련 문서: `02-requirements-features.md`, `06-sprint-plan.md`
 
 ## 1. 브랜치 단위 — 기능(F-XXXXX) 단위
@@ -23,10 +23,17 @@
 PR을 `main`에 병합할 때는 **Squash merge만 사용**한다. 기능/작업 단위로 커밋 1개가 남아
 `main`의 이력이 스프린트 계획과 1:1로 대응한다. 병합 후 브랜치는 삭제한다.
 
-**GitHub 저장소 설정 (웹 UI에서 1회 수동 적용, `gh` CLI 미설치로 자동화 불가):**
-- Settings → General → Pull Requests: "Allow squash merging"만 체크, merge commit/rebase는 해제
-- Settings → General → Pull Requests: "Automatically delete head branches" 체크
-- Settings → Branches → `main` 보호 규칙: "Require a pull request before merging" 체크 (직접 push 방지)
+**GitHub 저장소 설정** (2026-09-15에 `gh` CLI 설치 완료. 아래 상태 기준):
+
+| 설정 | 상태 | 적용 방법 |
+|------|------|-----------|
+| "Allow squash merging"만 체크, merge commit/rebase 해제 | ✅ 적용 완료 (2026-09-15) | `gh api -X PATCH repos/{owner}/{repo} -F allow_squash_merge=true -F allow_merge_commit=false -F allow_rebase_merge=false` |
+| "Automatically delete head branches" 체크 | ✅ 적용 완료 (2026-09-15) | 위 명령에 `-F delete_branch_on_merge=true` |
+| `main` 보호 규칙: "Require a pull request before merging" (직접 push 방지) | ⬜ 미적용 | 아래 참고 |
+
+`main` 보호 규칙은 Settings → Branches에서 수동으로 적용한다. "Require a pull request before
+merging"을 체크하고, 1인 개발 단계에서는 "Required approvals"를 0으로 두어 본인이 올린 PR을
+스스로 병합할 수 있게 한다.
 
 ## 3. main 원칙
 
