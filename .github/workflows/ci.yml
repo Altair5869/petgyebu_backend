@@ -35,7 +35,7 @@ jobs:
     env:
       PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
       REGION: asia-northeast3
-      SERVICE_NAME: budget-pet-api
+      SERVICE_NAME: telo
       CLOUDSQL_INSTANCE: ${{ vars.CLOUDSQL_INSTANCE }}
     steps:
       - uses: actions/checkout@v4

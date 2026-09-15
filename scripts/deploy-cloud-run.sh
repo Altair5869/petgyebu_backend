@@ -7,7 +7,7 @@
 set -euo pipefail
 
 PROJECT_ID="${PROJECT_ID:?PROJECT_ID 환경변수가 필요하다}"
-SERVICE_NAME="${SERVICE_NAME:-budget-pet-api}"
+SERVICE_NAME="${SERVICE_NAME:-telo}"
 REGION="${REGION:-asia-northeast3}"
 IMAGE="${IMAGE:?IMAGE 환경변수가 필요하다 (예: asia-northeast3-docker.pkg.dev/PROJECT/repo/backend:tag)}"
 CLOUDSQL_INSTANCE="${CLOUDSQL_INSTANCE:-}"

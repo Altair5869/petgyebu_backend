@@ -7,7 +7,7 @@
 set -euo pipefail
 
 PROJECT_ID="${PROJECT_ID:?PROJECT_ID 환경변수가 필요하다}"
-SERVICE_NAME="${SERVICE_NAME:-budget-pet-api}"
+SERVICE_NAME="${SERVICE_NAME:-telo}"
 REGION="${REGION:-asia-northeast3}"
 EXPECTED_MIN_INSTANCES="${EXPECTED_MIN_INSTANCES:-1}"
 
