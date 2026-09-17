@@ -11,6 +11,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 마이그레이션 순서 검사가 기준 브랜치와 대조해야 해서 전체 이력이 필요하다.
+          fetch-depth: 0
+
+      - name: Check migration order
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch origin "${{ github.base_ref }}" --depth=0
+          ./scripts/check-migration-order.sh "origin/${{ github.base_ref }}"
 
       - name: Set up JDK 25
         uses: actions/setup-java@v4

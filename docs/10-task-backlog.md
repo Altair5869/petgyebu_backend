@@ -147,7 +147,7 @@ chore/{슬러그}               F-ID 없는 인프라·기술 부채
 
 | | ID | 제목 | 브랜치 | 완료 기준 | 의존 | 차단 |
 |---|---|---|---|---|---|---|
-| [ ] | T-047 | out-of-order 마이그레이션 방침 결정 | `chore/flyway-out-of-order` | 병합 전 재타임스탬프를 원칙으로 할지 `spring.flyway.out-of-order`를 켤지 정하고 문서화한다. **첫 마이그레이션(T-001) 전에 정하는 것이 좋다** | — | — |
+| [x] | T-047 | out-of-order 마이그레이션 방침 결정 | `chore/flyway-out-of-order` | ✅ 완료. `out-of-order: false` 명시, 병합 전 재타임스탬프 원칙, `scripts/check-migration-order.sh`로 CI 강제 | — | — |
 | [ ] | T-048 | CI의 "조용한 성공" 제거 | `chore/ci-fail-without-credentials` | GCP 자격증명이 없을 때 배포·검증 스텝이 스킵되고 잡이 성공으로 끝나는 구조를 고친다 | — | **B-GCP** |
 | [ ] | T-049 | Cloud Run 플래그 검증 스크립트 보강 | `chore/verify-serving-revision` | `status.latestReadyRevisionName`을 대조해 실제 트래픽 받는 리비전을 검증한다. 애노테이션 키 실물 확인 | — | **B-GCP** |
 | [ ] | T-050 | Redis 헬스 인디케이터 복구 | `chore/enable-redis-health` | `application-local.yaml`의 비활성 설정을 제거한다 | — | **B-REDIS** |
@@ -161,7 +161,7 @@ chore/{슬러그}               F-ID 없는 인프라·기술 부채
 
 | 순서 | ID | 제목 | 비고 |
 |---|---|---|---|
-| 1 | T-047 | out-of-order 마이그레이션 방침 | 첫 마이그레이션 전에 정하는 것이 순서상 맞다 |
+| ~~1~~ | ~~T-047~~ | ~~out-of-order 마이그레이션 방침~~ | ✅ 2026-09-17 완료 |
 | 2 | T-001 | `users`·`user_consents` 스키마와 엔티티 | 거의 모든 Task의 뿌리다 |
 | 3 | T-023 | `budget_periods`·`status_thresholds` 스키마 | T-001만 있으면 된다 |
 | 4 | T-013 | `categories`·`merchant_keyword_rules` 스키마와 시드 | 카테고리 10개는 이미 확정됐다 |
