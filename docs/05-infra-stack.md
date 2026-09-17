@@ -136,9 +136,9 @@ gcloud run deploy telo \
 
 Spring Batch 메타 테이블(`BATCH_*`)도 Flyway로 관리한다(`spring.batch.jdbc.initialize-schema: never`). DDL은 직접 작성하지 말고 Spring Batch 배포본에 포함된 `schema-postgresql.sql`을 마이그레이션 파일로 옮겨 쓴다.
 
-**Sprint 1 착수 전에 처리할 것 2가지** (2026-09-15 QA 지적):
+**Sprint 1 착수 전에 처리할 것** (2026-09-15 QA 지적):
 
-1. **CI에서 Flyway와 `validate`가 한 번도 실행되지 않는다.** `TeloApplicationTests`가 `local` 프로필(H2·Flyway 비활성)을 쓰기 때문이다. 엔티티만 추가하고 마이그레이션을 빠뜨려도 `./gradlew test`는 통과하고, PostgreSQL 기동 시점에 `SchemaManagementException: Schema validation: missing table`로 죽는다. PR은 초록불이고 배포에서 처음 터진다. Testcontainers로 운영 프로필 컨텍스트 테스트를 하나 추가해야 한다.
+1. ~~CI에서 Flyway와 `validate`가 한 번도 실행되지 않는다.~~ **✅ 2026-09-17 해소.** `PostgresMigrationTest`(Testcontainers + PostgreSQL 16)를 추가해 운영 프로필을 실제로 검증한다. 마이그레이션 없이 엔티티만 추가하면 이 테스트가 `Schema validation: missing table`로 실패하는 것을 확인했다. 같은 상태에서 `local` 프로필 테스트는 통과하므로, 두 테스트를 모두 유지해야 의미가 있다.
 2. **out-of-order 마이그레이션 방침이 없다.** 타임스탬프 규칙은 파일명 충돌만 막는다. 이미 적용된 것보다 낮은 버전이 나중에 병합되면 `FlywayValidateException`으로 기동이 실패한다. 병합 전 재타임스탬프를 원칙으로 할지 `spring.flyway.out-of-order`를 켤지 정해야 한다. 이 문제는 병합자 로컬(H2·Flyway 비활성)에서는 재현되지 않고 운영에서만 드러난다.
 
 ### 3.4 캐시/분산락 — Upstash Redis (도쿄 리전)
