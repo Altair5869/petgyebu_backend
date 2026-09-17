@@ -35,3 +35,26 @@ out/
 
 ### VS Code ###
 .vscode/
+
+### 자격증명 / 시크릿 ###
+# 코드에프 client-id/client-secret, GCP 자격증명 등은 절대 커밋하지 않는다.
+# 설정 파일은 ${SANDBOX_CLIENT_ID} 형태의 환경변수 참조만 담는다.
+.env
+.env.*
+!.env.example
+
+# GCP 서비스 계정 키 (JSON). Cloud Run에서는 ADC를 쓰고 키 파일을 두지 않는 것이 원칙이다.
+*-service-account*.json
+service-account*.json
+gcp-*-key.json
+application_default_credentials.json
+
+# Firebase Admin SDK 키
+*-firebase-adminsdk-*.json
+
+# 인증서·키 파일 일반
+*.p8
+*.p12
+*.pem
+*.jks
+*.keystore
