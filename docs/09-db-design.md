@@ -446,6 +446,7 @@ append-only라 `updated_at`이 없다.
 | `id` | BIGINT | PK, identity | |
 | `user_id` | BIGINT | NOT NULL, FK→users ON DELETE CASCADE | |
 | `shop_item_id` | BIGINT | NOT NULL, FK→shop_items | |
+| `item_type` | VARCHAR(20) | NOT NULL, CHECK IN ('WALLPAPER','FLOOR','HOUSE','TOY') | **`shop_items`에서 복사한 비정규화 컬럼.** 아래 설명 참고 |
 | `acquisition_type` | VARCHAR(10) | NOT NULL, CHECK IN ('PURCHASE','GRANT') | 명세가 획득 경로를 구매·지급으로 구분한다 |
 | `price_paid` | BIGINT | NULL | **구매 시점 가격 스냅샷.** 가격이 바뀌어도 보관함에 당시 가격이 남는다 |
 | `acquired_at` | TIMESTAMPTZ | NOT NULL, DEFAULT now() | |
@@ -455,14 +456,16 @@ append-only라 `updated_at`이 없다.
 
 **인덱스**
 
-- `UNIQUE (user_id, item_type)` WHERE `is_placed = TRUE` — **부분 유니크 인덱스.** 슬롯당 1개 규칙을 DB가 보장한다. `item_type`은 `shop_items`에 있으므로 이 제약을 걸려면 `user_items`에도 `item_type`을 비정규화해야 한다(아래 참고)
+- `UNIQUE (user_id, item_type)` WHERE `is_placed = TRUE` — **부분 유니크 인덱스.** 슬롯당 1개 규칙을 DB가 보장한다
 - 메인 홈은 이 인덱스로 배치된 4개를 한 번에 읽는다
 
-**`item_type` 비정규화**: 슬롯당 1개를 DB 제약으로 막으려면 `user_items`에 `item_type` 컬럼이 필요하다. `shop_items`를 조인해서는 부분 유니크 인덱스를 걸 수 없다. 구매 시점에 `shop_items.item_type`을 복사해 넣고, 이후 변경하지 않는다(상점 아이템의 슬롯이 바뀌는 일은 없다).
+#### `item_type`을 비정규화한 이유
 
-| 추가 컬럼 | 타입 | 제약 |
-|---|---|---|
-| `item_type` | VARCHAR(20) | NOT NULL, CHECK IN ('WALLPAPER','FLOOR','HOUSE','TOY') |
+슬롯당 1개를 DB 제약으로 막으려면 `user_items` 자체에 `item_type`이 있어야 한다. **PostgreSQL의 부분 유니크 인덱스는 해당 테이블의 컬럼만 참조할 수 있어서, `shop_items`를 조인해 만들 수 없다.** 조인으로 풀려면 트리거나 머티리얼라이즈드 뷰가 필요한데 둘 다 이 규모에 과하다.
+
+**구현 규칙**: 구매·지급으로 `user_items` 행을 만들 때 `shop_items.item_type`을 복사해 넣는다. 이후 이 값을 변경하지 않는다(상점 아이템의 슬롯이 바뀌는 일은 없다). 엔티티 매핑에서 `updatable = false`로 막는다.
+
+이 컬럼을 빠뜨리면 슬롯당 1개 규칙이 애플리케이션 검사에만 의존하게 되고, 동시 요청에서 같은 슬롯에 두 개가 배치되는 상태가 만들어진다.
 
 ---
 
@@ -520,3 +523,4 @@ FK 의존 때문에 순서가 정해진다. 스프린트 순서와도 맞는다.
 4. **거래 저장은 계좌 조회를 거친 경로로만 한다.** `user_id` 비정규화 때문에 계좌 소유자와 어긋날 수 있다.
 5. **크레딧 갱신은 `SELECT FOR UPDATE`로 잠근다.**
 6. **이체 후보 매칭 함수는 별도로 분리한다.** 자동 연결(F-OAVYWT)과 수동 확인(F-KBBFRU) 양쪽에서 재사용한다.
+7. **`user_items.item_type`은 행 생성 시 `shop_items`에서 복사하고 이후 갱신하지 않는다.** 이 컬럼이 없으면 슬롯당 1개 규칙을 DB가 보장할 수 없다(5.4 참고).
