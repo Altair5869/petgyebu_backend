@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build
+        run: ./gradlew build --no-daemon
+
+  deploy:
+    name: Deploy to Cloud Run
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      REGION: asia-northeast3
+      SERVICE_NAME: telo
+      CLOUDSQL_INSTANCE: ${{ vars.CLOUDSQL_INSTANCE }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # secrets 컨텍스트는 job 레벨 if에서 쓸 수 없으므로 스텝에서 판별한다.
+      # GCP 자격증명이 아직 없는 단계(프로비저닝 전)에서는 이후 스텝이 전부 스킵된다.
+      - name: Check GCP credentials
+        id: creds
+        env:
+          WIF_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+        run: |
+          if [ -n "$WIF_PROVIDER" ] && [ -n "$SERVICE_ACCOUNT" ] && [ -n "$PROJECT_ID" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "GCP 자격증명이 없어 배포와 플래그 검증을 건너뛴다." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Authenticate to Google Cloud
+        if: steps.creds.outputs.available == 'true'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        if: steps.creds.outputs.available == 'true'
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build and push image
+        if: steps.creds.outputs.available == 'true'
+        id: image
+        run: |
+          IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/backend/${SERVICE_NAME}:${GITHUB_SHA}"
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy
+        if: steps.creds.outputs.available == 'true'
+        id: deploy
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+        run: ./scripts/deploy-cloud-run.sh
+
+      # 배포가 실제로 일어났으면 반드시 실행한다. 콘솔 수동 배포 등으로
+      # --no-cpu-throttling / --min-instances=1 이 리셋되면 여기서 빌드가 깨진다.
+      - name: Verify Cloud Run always-on flags
+        if: steps.deploy.outcome == 'success'
+        run: ./scripts/verify-cloud-run-flags.sh

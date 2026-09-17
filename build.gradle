@@ -17,12 +17,10 @@ repositories {
 	mavenCentral()
 }
 
-ext {
-	set('springAiVersion', "2.0.1")
-}
-
 dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
+	// Spring Boot 4.0에서 spring-boot-starter-aop이 spring-boot-starter-aspectj로 이름 변경됨
+	implementation 'org.springframework.boot:spring-boot-starter-aspectj'
 	implementation 'org.springframework.boot:spring-boot-starter-batch'
 	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
 	implementation 'org.springframework.boot:spring-boot-starter-data-redis'
@@ -30,7 +28,6 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-validation'
 	implementation 'org.springframework.boot:spring-boot-starter-webmvc'
 	implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:3.1.0'
-	implementation 'org.springframework.ai:spring-ai-starter-model-anthropic'
 
 	//jwt
 	implementation 'io.jsonwebtoken:jjwt-api:0.13.0'
@@ -39,14 +36,34 @@ dependencies {
 
 	//gcp
 	implementation 'com.google.cloud.sql:postgres-socket-factory:1.28.1'
-	implementation 'com.google.firebase:firebase-admin'
+	implementation 'com.google.firebase:firebase-admin:9.10.0'
 
 	//codef
 	implementation 'io.codef.api:easycodef-java:1.0.6'
 
+	//resilience4j (Spring Boot 4 전용 애드온)
+	implementation 'io.github.resilience4j:resilience4j-spring-boot4:2.4.0'
+
+	//shedlock (분산락, Redis 백엔드)
+	implementation 'net.javacrumbs.shedlock:shedlock-spring:7.9.0'
+	implementation 'net.javacrumbs.shedlock:shedlock-provider-redis-spring:7.9.0'
+
+	//querydsl (원본이 아니라 OpenFeign 포크)
+	implementation 'io.github.openfeign.querydsl:querydsl-jpa:7.5'
+	annotationProcessor 'io.github.openfeign.querydsl:querydsl-apt:7.5:jakarta'
+	annotationProcessor 'jakarta.persistence:jakarta.persistence-api'
+	annotationProcessor 'jakarta.annotation:jakarta.annotation-api'
+
+	//flyway (버전은 Spring Boot 4.0 BOM이 관리한다 — 현재 11.14.1)
+	// Spring Boot 4.0은 자동설정을 모듈로 쪼갰다. spring-boot-flyway가 없으면
+	// FlywayAutoConfiguration이 클래스패스에 없어 Flyway가 조용히 아무것도 하지 않는다.
+	implementation 'org.springframework.boot:spring-boot-flyway'
+	implementation 'org.flywaydb:flyway-core'
+	runtimeOnly 'org.flywaydb:flyway-database-postgresql'
+
 	compileOnly 'org.projectlombok:lombok'
-	developmentOnly 'org.springframework.boot:spring-boot-devtools'
 	runtimeOnly 'org.postgresql:postgresql'
+	developmentOnly 'com.h2database:h2'
 	annotationProcessor 'org.projectlombok:lombok'
 	testImplementation 'org.springframework.boot:spring-boot-starter-actuator-test'
 	testImplementation 'org.springframework.boot:spring-boot-starter-batch-test'
@@ -57,13 +74,8 @@ dependencies {
 	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
 	testCompileOnly 'org.projectlombok:lombok'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+	testRuntimeOnly 'com.h2database:h2'
 	testAnnotationProcessor 'org.projectlombok:lombok'
-}
-
-dependencyManagement {
-	imports {
-		mavenBom "org.springframework.ai:spring-ai-bom:${springAiVersion}"
-	}
 }
 
 tasks.named('test') {

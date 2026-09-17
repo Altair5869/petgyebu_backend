@@ -1,0 +1,24 @@
+spring:
+  application:
+    name: telo
+  datasource:
+    url: jdbc:h2:mem:telo;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  jpa:
+    hibernate:
+      # local에서만 Hibernate가 스키마를 만든다. Flyway 마이그레이션은 PostgreSQL 전용
+      # 문법(JSONB, GIN 인덱스 등)을 쓸 예정이라 H2에서 그대로 돌릴 수 없다.
+      ddl-auto: create-drop
+  flyway:
+    # 위와 같은 이유로 local(H2)에서는 Flyway를 돌리지 않는다.
+    # 마이그레이션의 실제 검증은 PostgreSQL 대상으로만 한다.
+    enabled: false
+
+management:
+  health:
+    # Cloud SQL / Upstash가 아직 프로비저닝되지 않은 단계라 Redis 헬스 체크를 끈다.
+    # Upstash 연결이 붙는 시점에 이 설정을 제거한다.
+    redis:
+      enabled: false

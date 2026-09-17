@@ -1,7 +1,7 @@
 # 인프라 스택 결정 문서
 
 - 관련 프로젝트: 반려동물 감정 기반 소비 관리 가계부 앱
-- 최종 갱신: 2026-09-05 (빌드도구 Maven → Gradle-Groovy로 변경, QueryDSL 좌표 정정)
+- 최종 갱신: 2026-09-15 (Sprint 0 인프라 착수 결과 반영 — 프로젝트 메타데이터 정정, 7장 의존성 오류 2건 수정, Action Item 3건 해소)
 - 결정 상태: **전체 확정** (컴퓨트/DB 벤더, 언어/프레임워크 버전 포함 미확정 항목 없음)
 - 관련 문서: `01-prd.md`, `02-requirements-features.md`, `03-user-flow.md`, `04-review-log.md`
 
@@ -79,7 +79,7 @@ AWS → NHN Cloud/Vultr(국내 클라우드) → Cloudflare/Supabase 부분 검�
 
 **설정 파일은 YAML.** 코드에프 지원은행 목록(20개 배열), SANDBOX/DEMO 프로필 분리, 예산 임계값 6단계 등 계층·리스트 구조가 많아 YAML의 들여쓰기 표현이 유리하다. ⚠️ 은행 조직코드("0004" 등)는 반드시 따옴표로 감싸 문자열로 명시할 것 — YAML이 앞자리 0을 숫자로 해석해 날릴 수 있음.
 
-**프로젝트 메타데이터**: Group `com.budgetpet`, Artifact `budget-pet-api`(Cloud Run 서비스명·Cloud SQL 인스턴스명과 통일).
+**프로젝트 메타데이터** (2026-09-15 정정): Group `com.petgyebu`, Artifact `telo`, 루트 패키지 `com.petgyebu.telo`. Cloud Run 서비스명도 `telo`로 통일한다. 이전 문서에는 `com.budgetpet`/`budget-pet-api`로 적혀 있었으나 실제 저장소가 `com.petgyebu`/`telo`로 생성돼 있어 코드 기준으로 맞췄다.
 
 **Spring Boot 4.0 전환에 따른 구체적 변경점**:
 - Jakarta EE 11 베이스라인 (Jakarta Persistence 3.2, Servlet 6.1 등)
@@ -94,14 +94,14 @@ AWS → NHN Cloud/Vultr(국내 클라우드) → Cloudflare/Supabase 부분 검�
 ### 3.2 컴퓨트 — Google Cloud Run
 
 ```bash
-gcloud run deploy budget-pet-api \
+gcloud run deploy telo \
   --image=asia-northeast3-docker.pkg.dev/PROJECT/repo/backend:latest \
   --region=asia-northeast3 \
   --no-cpu-throttling \
   --min-instances=1 \
   --max-instances=3 \
   --cpu=2 --memory=2Gi \
-  --add-cloudsql-instances=PROJECT:asia-northeast3:budget-pet-db
+  --add-cloudsql-instances=PROJECT:asia-northeast3:telo-db
 ```
 
 `--no-cpu-throttling`(요청 없어도 CPU 계속 할당)과 `--min-instances=1`(콜드스타트 없이 상시구동)을 함께 쓰면 ShedLock 백그라운드 스레드·Spring Batch 스케줄러가 죽지 않는 상시구동 프로세스처럼 동작한다. Google Cloud 공식 블로그가 이 기능의 활용 사례로 "Spring Boot 앱의 내장 스케줄링/백그라운드 기능을 옮기는 것"을 직접 예시로 든다.
@@ -116,10 +116,30 @@ gcloud run deploy budget-pet-api \
 - `--add-cloudsql-instances` 플래그로 **VPC 커넥터 없이 Cloud SQL Auth Proxy가 자동으로 암호화 터널을 생성** — 이게 AWS의 NAT Gateway 상시 비용 문제를 근본적으로 피해가는 지점. AWS ECS Fargate는 보통 프라이빗 서브넷+NAT Gateway 패턴(시간당+처리량 과금)을 쓰는데, Cloud Run은 애초에 VPC에 묶여있지 않은 서버리스 모델이라 이 비용이 발생하지 않는다.
 - Spring Boot 연결 예시:
   ```yaml
-  spring.datasource.url: jdbc:postgresql:///budgetdb?cloudSqlInstance=PROJECT:asia-northeast3:budget-pet-db&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+  spring.datasource.url: jdbc:postgresql:///telodb?cloudSqlInstance=PROJECT:asia-northeast3:telo-db&socketFactory=com.google.cloud.sql.postgres.SocketFactory
   ```
 - 초기 티어: `db-custom-1-3840`(1 vCPU/3.75GB). 실제 부하 테스트는 배포 후 재검증 필요(미확정 항목, 6장 참고).
 - HA(고가용성)는 초기엔 끄고 시작 — RDS Multi-AZ와 동일하게 비용이 약 2배가 되므로 MVP 단계엔 보류.
+
+### 3.3.1 스키마 관리 — Flyway (2026-09-15 확정)
+
+스키마 변경은 전부 Flyway 마이그레이션을 거친다. 운영 프로필의 `spring.jpa.hibernate.ddl-auto`는 `validate`로 고정해 Hibernate는 테이블을 만들지 않고 엔티티와 실제 스키마가 맞는지 검증만 한다. `update`를 쓰면 금융 거래 테이블이 배포 때마다 예고 없이 바뀔 수 있다.
+
+| 프로필 | DB | 스키마 생성 주체 | Flyway |
+|---|---|---|---|
+| 운영·컨테이너 | PostgreSQL 16 | Flyway | 활성, `ddl-auto: validate` |
+| `local` | H2 | Hibernate | 비활성, `ddl-auto: create-drop` |
+
+**마이그레이션의 대상 DBMS는 PostgreSQL 16 하나다.** JSONB·GIN 인덱스·윈도우 함수 같은 PostgreSQL 전용 문법을 제약 없이 쓰기 때문에 H2에서는 돌릴 수 없고, 그래서 `local`에서는 Flyway를 끄고 Hibernate가 스키마를 만든다.
+
+마이그레이션 파일 이름은 `V{YYYYMMDDHHmm}__{snake_case_설명}.sql` 형식을 쓴다. 순번 대신 타임스탬프를 쓰는 이유는 기능마다 브랜치를 따로 파고 병렬 진행하는 구간이 있어 순번이 충돌하기 때문이다(`docs/07-branch-strategy.md`). 상세 규칙은 `src/main/resources/db/migration/README.md` 참고.
+
+Spring Batch 메타 테이블(`BATCH_*`)도 Flyway로 관리한다(`spring.batch.jdbc.initialize-schema: never`). DDL은 직접 작성하지 말고 Spring Batch 배포본에 포함된 `schema-postgresql.sql`을 마이그레이션 파일로 옮겨 쓴다.
+
+**Sprint 1 착수 전에 처리할 것 2가지** (2026-09-15 QA 지적):
+
+1. **CI에서 Flyway와 `validate`가 한 번도 실행되지 않는다.** `TeloApplicationTests`가 `local` 프로필(H2·Flyway 비활성)을 쓰기 때문이다. 엔티티만 추가하고 마이그레이션을 빠뜨려도 `./gradlew test`는 통과하고, PostgreSQL 기동 시점에 `SchemaManagementException: Schema validation: missing table`로 죽는다. PR은 초록불이고 배포에서 처음 터진다. Testcontainers로 운영 프로필 컨텍스트 테스트를 하나 추가해야 한다.
+2. **out-of-order 마이그레이션 방침이 없다.** 타임스탬프 규칙은 파일명 충돌만 막는다. 이미 적용된 것보다 낮은 버전이 나중에 병합되면 `FlywayValidateException`으로 기동이 실패한다. 병합 전 재타임스탬프를 원칙으로 할지 `spring.flyway.out-of-order`를 켤지 정해야 한다. 이 문제는 병합자 로컬(H2·Flyway 비활성)에서는 재현되지 않고 운영에서만 드러난다.
 
 ### 3.4 캐시/분산락 — Upstash Redis (도쿄 리전)
 
@@ -165,24 +185,28 @@ v1은 코드에프 단독 연동으로 확정됐다(`04-review-log.md` 2026-09-0
 ## 6. 남은 확인 항목 / Action Items
 
 - [ ] 코드에프 데모 서비스 신청 (2-way 추가인증 흐름은 SANDBOX에서 테스트 불가, DEMO 서비스 필수)
-- [ ] **QueryDSL(OpenFeign 포크) Gradle `annotationProcessor` 설정 검증** (Sprint 0, 3.1절 참고 — Q클래스 생성·쿼리 실행 확인, classifier 필요 여부 포함)
-- [ ] **`easycodef-java` SDK의 JDK 25 호환성 검증** (Sprint 0, 3.1절 참고)
-- [ ] **`resilience4j-spring-boot4`, `shedlock-provider-redis-spring`, `firebase-admin`의 정확한 최신 버전을 Maven Central에서 재확인** (7장 표에 미확정으로 표시된 항목)
+- [x] **QueryDSL(OpenFeign 포크) Gradle `annotationProcessor` 설정 검증** — 2026-09-15 완료. **classifier가 필수다**(7장 참고). Q클래스 생성은 확인했고, 실쿼리 실행은 엔티티가 생기는 Sprint 1에서 확인한다
+- [x] **`easycodef-java` SDK의 JDK 25 호환성 검증** — 2026-09-15 완료. `EasyCodefUtil.encryptRSA()` RSA 왕복 테스트 통과. 클래스 파일 메이저 버전 52(Java 8)라 런타임 문제 없음. 네트워크 경로(토큰 발급, 2-way 추가인증)는 자격증명·데모 승인 후 확인
+- [x] **`resilience4j-spring-boot4`, `shedlock-provider-redis-spring`, `firebase-admin` 버전 확인** — 2026-09-15 완료. 7장 표에 확정 버전을 반영했다
 - [ ] Google for Startups Cloud Program 신청 — 법인 설립 후 진행(현재는 개인/팀 단계라 신청 요건인 "비즈니스 이메일이 스타트업 공개 도메인과 일치" 충족 어려움). 그 전까지는 GCP 신규가입 무료체험($300, 90일)으로 개발 진행
 - [ ] Cloud SQL 티어(`db-custom-1-3840`)가 실제 부하 테스트 후에도 충분한지 확인 (배포 후에만 확인 가능한 항목)
 - [ ] 코드에프 실제 지원 은행 목록 최신본 재확인 (2026-09-03 목록 확보했으나 카카오뱅크·토스뱅크 최신 지원 여부는 지속 모니터링)
+- [ ] **Cloud Run 첫 배포 시 `scripts/verify-cloud-run-flags.sh`의 실동작 확인** (2026-09-15 추가) — 애노테이션 키 `run.googleapis.com/cpu-throttling`·`autoscaling.knative.dev/minScale`은 Knative 규약 기준 추정이며 실물 출력과 대조하지 못했다. 또 현재 스크립트는 `spec.template.metadata.annotations`(희망 상태)만 보고 실제 트래픽을 받는 리비전을 보지 않아, 배포가 부분 실패해도 통과할 수 있다. `status.latestReadyRevisionName` 대조로 보강해야 한다
+- [ ] **GCP 연결 후 CI의 "조용한 성공" 제거** (2026-09-15 추가) — 현재 CI는 GCP 자격증명이 없으면 배포·플래그 검증 스텝을 전부 스킵하고 잡을 성공으로 끝낸다. 지금은 의도된 동작이지만, 시크릿이 만료되면 배포와 검증이 사라진 채 CI는 계속 초록색으로 남는다. 자격증명 판별 스텝의 `else` 분기를 `exit 1`로 바꾸거나 `vars.DEPLOY_ENABLED` 구조로 전환해야 한다
 
 ## 7. 백엔드 의존성 목록 (Gradle - Groovy)
 
 start.spring.io에서 Java 25 + Spring Boot 4.0.x + **Gradle - Groovy**로 프로젝트 생성 시 체크할 스타터와, 생성 후 `build.gradle`에 직접 추가할 항목을 구분했다.
 
-**Initializr에서 체크**: Spring Web(내부적으로 `spring-boot-starter-webmvc`), Spring Data JPA, Spring Security, Spring Batch, Validation, Spring Data Redis, Spring Boot Actuator, Spring AOP(`spring-boot-starter-aop` — Initializr 목록에 안 보이면 `build.gradle`에 직접 추가, 버전 명시 불필요)
+**Initializr에서 체크**: Spring Web(내부적으로 `spring-boot-starter-webmvc`), Spring Data JPA, Spring Security, Spring Batch, Validation, Spring Data Redis, Spring Boot Actuator, AOP는 **`spring-boot-starter-aspectj`**를 쓴다(아래 ⚠️ 참고)
 
 **직접 추가**:
 
 ```groovy
 dependencies {
-    implementation 'io.github.resilience4j:resilience4j-spring-boot4'
+    implementation 'org.springframework.boot:spring-boot-starter-aspectj'
+
+    implementation 'io.github.resilience4j:resilience4j-spring-boot4:2.4.0'
     implementation 'net.javacrumbs.shedlock:shedlock-spring:7.9.0'
     implementation 'net.javacrumbs.shedlock:shedlock-provider-redis-spring:7.9.0'
     implementation 'io.codef.api:easycodef-java:1.0.6'
@@ -193,12 +217,18 @@ dependencies {
 
     runtimeOnly 'org.postgresql:postgresql'
     implementation 'com.google.cloud.sql:postgres-socket-factory:1.28.1'
-    implementation 'com.google.firebase:firebase-admin'
+
+    implementation 'org.springframework.boot:spring-boot-flyway'  // 자동설정 모듈, 생략 금지
+    implementation 'org.flywaydb:flyway-core'
+    runtimeOnly 'org.flywaydb:flyway-database-postgresql'
+    implementation 'com.google.firebase:firebase-admin:9.10.0'
 
     implementation 'io.github.openfeign.querydsl:querydsl-jpa:7.5'
-    annotationProcessor 'io.github.openfeign.querydsl:querydsl-apt:7.5'
+    annotationProcessor 'io.github.openfeign.querydsl:querydsl-apt:7.5:jakarta'  // classifier 필수
     annotationProcessor 'jakarta.persistence:jakarta.persistence-api'
     annotationProcessor 'jakarta.annotation:jakarta.annotation-api'
+
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:3.1.0'
 
     compileOnly 'org.projectlombok:lombok'
     annotationProcessor 'org.projectlombok:lombok'
@@ -207,14 +237,17 @@ dependencies {
 
 | 의존성 | 좌표/버전 | 비고 |
 |---|---|---|
-| QueryDSL | `io.github.openfeign.querydsl:querydsl-jpa:7.5`, `querydsl-apt:7.5` | ⚠️ **원본 `com.querydsl`이 아니라 이 포크 사용** — 원본은 5.1.0에서 사실상 멈춤. Gradle `annotationProcessor` 설정·classifier 필요 여부는 Sprint 0 검증 대상 |
-| Resilience4j | `io.github.resilience4j:resilience4j-spring-boot4` | 정확한 최신 버전 미확인, 추가 시 Maven Central 재확인 |
-| ShedLock | `net.javacrumbs.shedlock:shedlock-spring:7.9.0`, `shedlock-provider-redis-spring:7.9.0` | Boot 버전별 아티팩트 분리 없음 |
-| 코드에프 SDK | `io.codef.api:easycodef-java:1.0.6` | ⚠️ JDK 25 호환성 Sprint 0 검증 필요 |
+| QueryDSL | `io.github.openfeign.querydsl:querydsl-jpa:7.5`, `querydsl-apt:7.5:jakarta` | ⚠️ **원본 `com.querydsl`이 아니라 이 포크 사용** — 원본은 5.1.0에서 사실상 멈춤. ⚠️ **`:jakarta` classifier가 필수다** — 2026-09-15 검증 결과, classifier 없는 `querydsl-apt-7.5.jar`에는 `META-INF/services/javax.annotation.processing.Processor`가 없어 Q클래스가 하나도 생성되지 않는다. 그런데 빌드는 정상 종료(exit 0)하므로 **조용히 실패한다**. `:jpa`와 `:jakarta` classifier jar는 md5가 동일한 같은 파일이며, 포크가 네이티브 jakarta라 `:jakarta`를 쓰는 것이 의도가 분명하다 |
+| Resilience4j | `io.github.resilience4j:resilience4j-spring-boot4:2.4.0` | ✅ 2026-09-15 확인. 2.4.0이 유일 버전 |
+| ShedLock | `net.javacrumbs.shedlock:shedlock-spring:7.9.0`, `shedlock-provider-redis-spring:7.9.0` | Boot 버전별 아티팩트 분리 없음. 2026-09-15 기준 최신은 7.10.1이나 문서 확정값 7.9.0 유지 |
+| 코드에프 SDK | `io.codef.api:easycodef-java:1.0.6` | ✅ 2026-09-15 JDK 25 호환성 검증 완료 — `EasyCodefUtil.encryptRSA()` RSA 왕복 통과, 클래스 파일 메이저 버전 52(Java 8). 네트워크 경로는 데모 승인 후 확인 |
 | JWT | `io.jsonwebtoken:jjwt-api:0.13.0`, `jjwt-impl:0.13.0`(runtime), `jjwt-jackson:0.13.0`(runtime) | 2025-08 릴리스, 확인 완료 |
 | PostgreSQL 드라이버 | `org.postgresql:postgresql`(runtime, 버전 생략) | Spring Boot BOM 관리 대상 |
 | Cloud SQL 소켓 팩토리 | `com.google.cloud.sql:postgres-socket-factory:1.28.1` | ⚠️ Spring Boot BOM 비관리 대상 — 버전 필수 명시(이전에 이 누락으로 에러 발생 이력 있음) |
-| FCM | `com.google.firebase:firebase-admin`(버전 생략) | 정확한 최신 버전 미확인, 추가 시 Maven Central 재확인 |
+| FCM | `com.google.firebase:firebase-admin:9.10.0` | ✅ 2026-09-15 확인. **버전 생략이 Sprint 0 착수 시점 빌드 실패의 직접 원인이었다** — BOM 비관리 대상이다 |
 | Lombok(선택) | `org.projectlombok:lombok`(compileOnly + annotationProcessor) | 엔티티 보일러플레이트 감소, 팀 취향 |
+| AOP | `org.springframework.boot:spring-boot-starter-aspectj` | ⚠️ **`spring-boot-starter-aop`는 Spring Boot 4.0에 존재하지 않는다** — Maven Central 마지막 버전이 `4.0.0-M2`이고 `spring-boot-dependencies:4.0.8` BOM에도 없다. 2026-09-15에 실제로 넣어보니 `Could not find org.springframework.boot:spring-boot-starter-aop:.`로 빌드가 깨졌다 |
+| Flyway | `org.springframework.boot:spring-boot-flyway`, `org.flywaydb:flyway-core`, `org.flywaydb:flyway-database-postgresql`(runtime) | ⚠️ **`spring-boot-flyway`를 빠뜨리면 Flyway가 조용히 아무것도 하지 않는다** — Spring Boot 4.0이 자동설정을 모듈로 쪼개면서 `FlywayAutoConfiguration`이 `spring-boot-autoconfigure`에서 빠지고 `spring-boot-flyway` 아티팩트로 옮겨갔다. 2026-09-15 실측: 이 한 줄만 빼면 Flyway 로그 0줄, 경고 0건, 기동 성공, **DB에 테이블 0개**. `spring.flyway.enabled: true`도 무시된다. 버전은 Boot 4.0 BOM이 관리한다(현재 11.14.1) |
+| API 문서 | `org.springdoc:springdoc-openapi-starter-webmvc-ui:3.1.0` | 2026-09-15 추가 기록. 저장소 생성 시점부터 포함돼 있었고 유지하기로 결정했다. 운영 프로필에서 비활성화할지는 미결 |
 
-**BOM 관리 여부를 반드시 구분할 것**: Spring Boot 스타터 계열과 PostgreSQL 드라이버는 Spring Boot 4.0의 `dependency-management`(Gradle 플러그인이 자동 적용)가 버전을 관리해 생략 가능하다. 반면 QueryDSL·ShedLock·jjwt·easycodef-java·Cloud SQL 소켓 팩토리·Resilience4j·Firebase Admin은 **전부 Spring Boot BOM 밖의 서드파티 라이브러리라 버전 생략 시 해석 실패한다** — Gradle로 바꿔도 이 규칙 자체는 동일하게 적용된다.
+**BOM 관리 여부를 반드시 구분할 것**: Spring Boot 스타터 계열과 PostgreSQL 드라이버는 Spring Boot 4.0의 `dependency-management`(Gradle 플러그인이 자동 적용)가 버전을 관리해 생략 가능하다. 반면 QueryDSL·ShedLock·jjwt·easycodef-java·Cloud SQL 소켓 팩토리·Resilience4j·Firebase Admin은 **전부 Spring Boot BOM 밖의 서드파티 라이브러리라 버전 생략 시 해석 실패한다** — Gradle로 바꿔도 이 규칙 자체는 동일하게 적용된다. 2026-09-15 Sprint 0 착수 시점에 `firebase-admin`의 버전 생략으로 실제 빌드가 깨졌다.
