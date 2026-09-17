@@ -72,6 +72,16 @@ dependencies {
 	testImplementation 'org.springframework.boot:spring-boot-starter-security-test'
 	testImplementation 'org.springframework.boot:spring-boot-starter-validation-test'
 	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
+
+	// testcontainers — 운영 프로필(PostgreSQL + Flyway + ddl-auto validate)을 실제로
+	// 검증한다. local 프로필(H2)만 테스트하면 마이그레이션 누락을 CI가 못 잡는다.
+	// Testcontainers 2.x에서 모듈 좌표가 'testcontainers-' 접두사로 바뀌었다.
+	// 구 좌표(org.testcontainers:postgresql, :junit-jupiter)는 1.21.x에서 멈춰 있어
+	// Spring Boot 4.0 BOM이 관리하는 2.0.5와 맞지 않는다.
+	testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+	testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+	testImplementation 'org.testcontainers:testcontainers-postgresql'
+
 	testCompileOnly 'org.projectlombok:lombok'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 	testRuntimeOnly 'com.h2database:h2'

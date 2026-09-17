@@ -469,6 +469,16 @@ append-only라 `updated_at`이 없다.
 
 ---
 
+## 5.5 마이그레이션 검증 테스트
+
+`PostgresMigrationTest`(Testcontainers + PostgreSQL 16)가 운영 프로필을 실제로 기동해 Flyway 실행과 `ddl-auto: validate` 통과를 검증한다. 엔티티를 추가하고 마이그레이션을 빠뜨리면 이 테스트가 실패한다.
+
+**두 테스트를 모두 유지해야 한다.** `TeloApplicationTests`는 `local` 프로필(H2·Flyway 비활성)이라 같은 누락을 잡지 못한다. 2026-09-17에 마이그레이션 없는 엔티티를 넣고 확인한 결과, local 테스트는 통과하고 Testcontainers 테스트만 `Schema validation: missing table`로 실패했다.
+
+**Docker가 필요하다.** Docker 없이 `./gradlew build`를 돌리면 이 테스트가 실패한다. 조건부 스킵을 넣지 않은 것은 의도적이다. 스킵되면 CI가 초록불인 채로 검증이 사라져 테스트를 만든 이유가 없어진다.
+
+---
+
 ## 6. 마이그레이션 순서
 
 FK 의존 때문에 순서가 정해진다. 스프린트 순서와도 맞는다.
