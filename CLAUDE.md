@@ -1,4 +1,6 @@
-# CLAUDE.md
+# 프로젝트 지침
+
+이 파일은 `CLAUDE.md`이며, `AGENTS.md`는 여기를 가리키는 심볼릭 링크다. Claude Code와 Codex가 같은 지침을 읽는다. 내용을 고칠 때는 이 파일만 고치면 된다.
 
 ## 응답 스타일
 
@@ -25,3 +27,4 @@
 |------|----------|------|------|
 | 2026-09-05 | 초기 구성 (backend-engineer + qa-reviewer 2인 팀, 생성-검증 패턴) | 전체 | 스프린트 기반 백엔드 구현 자동화 |
 | 2026-09-07 | 브랜치 전략 반영 (기능 단위 브랜치, squash merge, push/PR은 사용자 확인 후 실행) | petgyebu-sprint, backend-engineer, docs/07-branch-strategy.md | GitHub 브랜치 전략 수립 |
+| 2026-09-17 | `AGENTS.md`를 `CLAUDE.md`를 가리키는 심볼릭 링크로 전환 | CLAUDE.md, AGENTS.md | 두 파일이 제목 한 줄 외에 동일해 한쪽만 고치면 두 하네스가 다르게 동작할 위험이 있었다 |
