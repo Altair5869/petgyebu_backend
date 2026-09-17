@@ -116,10 +116,30 @@ gcloud run deploy telo \
 - `--add-cloudsql-instances` 플래그로 **VPC 커넥터 없이 Cloud SQL Auth Proxy가 자동으로 암호화 터널을 생성** — 이게 AWS의 NAT Gateway 상시 비용 문제를 근본적으로 피해가는 지점. AWS ECS Fargate는 보통 프라이빗 서브넷+NAT Gateway 패턴(시간당+처리량 과금)을 쓰는데, Cloud Run은 애초에 VPC에 묶여있지 않은 서버리스 모델이라 이 비용이 발생하지 않는다.
 - Spring Boot 연결 예시:
   ```yaml
-  spring.datasource.url: jdbc:postgresql:///budgetdb?cloudSqlInstance=PROJECT:asia-northeast3:telo-db&socketFactory=com.google.cloud.sql.postgres.SocketFactory
+  spring.datasource.url: jdbc:postgresql:///telodb?cloudSqlInstance=PROJECT:asia-northeast3:telo-db&socketFactory=com.google.cloud.sql.postgres.SocketFactory
   ```
 - 초기 티어: `db-custom-1-3840`(1 vCPU/3.75GB). 실제 부하 테스트는 배포 후 재검증 필요(미확정 항목, 6장 참고).
 - HA(고가용성)는 초기엔 끄고 시작 — RDS Multi-AZ와 동일하게 비용이 약 2배가 되므로 MVP 단계엔 보류.
+
+### 3.3.1 스키마 관리 — Flyway (2026-09-15 확정)
+
+스키마 변경은 전부 Flyway 마이그레이션을 거친다. 운영 프로필의 `spring.jpa.hibernate.ddl-auto`는 `validate`로 고정해 Hibernate는 테이블을 만들지 않고 엔티티와 실제 스키마가 맞는지 검증만 한다. `update`를 쓰면 금융 거래 테이블이 배포 때마다 예고 없이 바뀔 수 있다.
+
+| 프로필 | DB | 스키마 생성 주체 | Flyway |
+|---|---|---|---|
+| 운영·컨테이너 | PostgreSQL 16 | Flyway | 활성, `ddl-auto: validate` |
+| `local` | H2 | Hibernate | 비활성, `ddl-auto: create-drop` |
+
+**마이그레이션의 대상 DBMS는 PostgreSQL 16 하나다.** JSONB·GIN 인덱스·윈도우 함수 같은 PostgreSQL 전용 문법을 제약 없이 쓰기 때문에 H2에서는 돌릴 수 없고, 그래서 `local`에서는 Flyway를 끄고 Hibernate가 스키마를 만든다.
+
+마이그레이션 파일 이름은 `V{YYYYMMDDHHmm}__{snake_case_설명}.sql` 형식을 쓴다. 순번 대신 타임스탬프를 쓰는 이유는 기능마다 브랜치를 따로 파고 병렬 진행하는 구간이 있어 순번이 충돌하기 때문이다(`docs/07-branch-strategy.md`). 상세 규칙은 `src/main/resources/db/migration/README.md` 참고.
+
+Spring Batch 메타 테이블(`BATCH_*`)도 Flyway로 관리한다(`spring.batch.jdbc.initialize-schema: never`). DDL은 직접 작성하지 말고 Spring Batch 배포본에 포함된 `schema-postgresql.sql`을 마이그레이션 파일로 옮겨 쓴다.
+
+**Sprint 1 착수 전에 처리할 것 2가지** (2026-09-15 QA 지적):
+
+1. **CI에서 Flyway와 `validate`가 한 번도 실행되지 않는다.** `TeloApplicationTests`가 `local` 프로필(H2·Flyway 비활성)을 쓰기 때문이다. 엔티티만 추가하고 마이그레이션을 빠뜨려도 `./gradlew test`는 통과하고, PostgreSQL 기동 시점에 `SchemaManagementException: Schema validation: missing table`로 죽는다. PR은 초록불이고 배포에서 처음 터진다. Testcontainers로 운영 프로필 컨텍스트 테스트를 하나 추가해야 한다.
+2. **out-of-order 마이그레이션 방침이 없다.** 타임스탬프 규칙은 파일명 충돌만 막는다. 이미 적용된 것보다 낮은 버전이 나중에 병합되면 `FlywayValidateException`으로 기동이 실패한다. 병합 전 재타임스탬프를 원칙으로 할지 `spring.flyway.out-of-order`를 켤지 정해야 한다. 이 문제는 병합자 로컬(H2·Flyway 비활성)에서는 재현되지 않고 운영에서만 드러난다.
 
 ### 3.4 캐시/분산락 — Upstash Redis (도쿄 리전)
 
@@ -197,6 +217,10 @@ dependencies {
 
     runtimeOnly 'org.postgresql:postgresql'
     implementation 'com.google.cloud.sql:postgres-socket-factory:1.28.1'
+
+    implementation 'org.springframework.boot:spring-boot-flyway'  // 자동설정 모듈, 생략 금지
+    implementation 'org.flywaydb:flyway-core'
+    runtimeOnly 'org.flywaydb:flyway-database-postgresql'
     implementation 'com.google.firebase:firebase-admin:9.10.0'
 
     implementation 'io.github.openfeign.querydsl:querydsl-jpa:7.5'
@@ -216,13 +240,14 @@ dependencies {
 | QueryDSL | `io.github.openfeign.querydsl:querydsl-jpa:7.5`, `querydsl-apt:7.5:jakarta` | ⚠️ **원본 `com.querydsl`이 아니라 이 포크 사용** — 원본은 5.1.0에서 사실상 멈춤. ⚠️ **`:jakarta` classifier가 필수다** — 2026-09-15 검증 결과, classifier 없는 `querydsl-apt-7.5.jar`에는 `META-INF/services/javax.annotation.processing.Processor`가 없어 Q클래스가 하나도 생성되지 않는다. 그런데 빌드는 정상 종료(exit 0)하므로 **조용히 실패한다**. `:jpa`와 `:jakarta` classifier jar는 md5가 동일한 같은 파일이며, 포크가 네이티브 jakarta라 `:jakarta`를 쓰는 것이 의도가 분명하다 |
 | Resilience4j | `io.github.resilience4j:resilience4j-spring-boot4:2.4.0` | ✅ 2026-09-15 확인. 2.4.0이 유일 버전 |
 | ShedLock | `net.javacrumbs.shedlock:shedlock-spring:7.9.0`, `shedlock-provider-redis-spring:7.9.0` | Boot 버전별 아티팩트 분리 없음. 2026-09-15 기준 최신은 7.10.1이나 문서 확정값 7.9.0 유지 |
-| 코드에프 SDK | `io.codef.api:easycodef-java:1.0.6` | ⚠️ JDK 25 호환성 Sprint 0 검증 필요 |
+| 코드에프 SDK | `io.codef.api:easycodef-java:1.0.6` | ✅ 2026-09-15 JDK 25 호환성 검증 완료 — `EasyCodefUtil.encryptRSA()` RSA 왕복 통과, 클래스 파일 메이저 버전 52(Java 8). 네트워크 경로는 데모 승인 후 확인 |
 | JWT | `io.jsonwebtoken:jjwt-api:0.13.0`, `jjwt-impl:0.13.0`(runtime), `jjwt-jackson:0.13.0`(runtime) | 2025-08 릴리스, 확인 완료 |
 | PostgreSQL 드라이버 | `org.postgresql:postgresql`(runtime, 버전 생략) | Spring Boot BOM 관리 대상 |
 | Cloud SQL 소켓 팩토리 | `com.google.cloud.sql:postgres-socket-factory:1.28.1` | ⚠️ Spring Boot BOM 비관리 대상 — 버전 필수 명시(이전에 이 누락으로 에러 발생 이력 있음) |
 | FCM | `com.google.firebase:firebase-admin:9.10.0` | ✅ 2026-09-15 확인. **버전 생략이 Sprint 0 착수 시점 빌드 실패의 직접 원인이었다** — BOM 비관리 대상이다 |
 | Lombok(선택) | `org.projectlombok:lombok`(compileOnly + annotationProcessor) | 엔티티 보일러플레이트 감소, 팀 취향 |
 | AOP | `org.springframework.boot:spring-boot-starter-aspectj` | ⚠️ **`spring-boot-starter-aop`는 Spring Boot 4.0에 존재하지 않는다** — Maven Central 마지막 버전이 `4.0.0-M2`이고 `spring-boot-dependencies:4.0.8` BOM에도 없다. 2026-09-15에 실제로 넣어보니 `Could not find org.springframework.boot:spring-boot-starter-aop:.`로 빌드가 깨졌다 |
+| Flyway | `org.springframework.boot:spring-boot-flyway`, `org.flywaydb:flyway-core`, `org.flywaydb:flyway-database-postgresql`(runtime) | ⚠️ **`spring-boot-flyway`를 빠뜨리면 Flyway가 조용히 아무것도 하지 않는다** — Spring Boot 4.0이 자동설정을 모듈로 쪼개면서 `FlywayAutoConfiguration`이 `spring-boot-autoconfigure`에서 빠지고 `spring-boot-flyway` 아티팩트로 옮겨갔다. 2026-09-15 실측: 이 한 줄만 빼면 Flyway 로그 0줄, 경고 0건, 기동 성공, **DB에 테이블 0개**. `spring.flyway.enabled: true`도 무시된다. 버전은 Boot 4.0 BOM이 관리한다(현재 11.14.1) |
 | API 문서 | `org.springdoc:springdoc-openapi-starter-webmvc-ui:3.1.0` | 2026-09-15 추가 기록. 저장소 생성 시점부터 포함돼 있었고 유지하기로 결정했다. 운영 프로필에서 비활성화할지는 미결 |
 
 **BOM 관리 여부를 반드시 구분할 것**: Spring Boot 스타터 계열과 PostgreSQL 드라이버는 Spring Boot 4.0의 `dependency-management`(Gradle 플러그인이 자동 적용)가 버전을 관리해 생략 가능하다. 반면 QueryDSL·ShedLock·jjwt·easycodef-java·Cloud SQL 소켓 팩토리·Resilience4j·Firebase Admin은 **전부 Spring Boot BOM 밖의 서드파티 라이브러리라 버전 생략 시 해석 실패한다** — Gradle로 바꿔도 이 규칙 자체는 동일하게 적용된다. 2026-09-15 Sprint 0 착수 시점에 `firebase-admin`의 버전 생략으로 실제 빌드가 깨졌다.
