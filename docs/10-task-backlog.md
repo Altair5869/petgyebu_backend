@@ -152,7 +152,7 @@ chore/{슬러그}               F-ID 없는 인프라·기술 부채
 | [ ] | T-049 | Cloud Run 플래그 검증 스크립트 보강 | `chore/verify-serving-revision` | `status.latestReadyRevisionName`을 대조해 실제 트래픽 받는 리비전을 검증한다. 애노테이션 키 실물 확인 | — | **B-GCP** |
 | [ ] | T-050 | Redis 헬스 인디케이터 복구 | `chore/enable-redis-health` | `application-local.yaml`의 비활성 설정을 제거한다 | — | **B-REDIS** |
 | [ ] | T-051 | 운영 프로필 springdoc 비활성화 검토 | `chore/springdoc-prod-policy` | 운영에서 API 문서를 노출할지 정하고 반영한다 | — | — |
-| [ ] | T-052 | **기준 타임존 KST 런타임 강제** | `chore/enforce-kst-timezone` | `hibernate.jdbc.time_zone`, JVM `user.timezone`, Dockerfile `TZ` 중 어디서 강제할지 정하고 반영한다. 서버 타임존이 UTC일 때 월 경계·코호트 계산이 어긋나지 않는지 테스트로 확인한다 | — | — |
+| [x] | T-052 | **기준 타임존 KST 런타임 강제** | `chore/enforce-kst-timezone` | ✅ 완료. `AppZone` 단일 출처, Dockerfile `TZ=Asia/Seoul`, 테스트는 일부러 UTC로 실행. `09-db-design.md` 0장 참고 | — | — |
 
 ---
 
@@ -164,7 +164,7 @@ chore/{슬러그}               F-ID 없는 인프라·기술 부채
 |---|---|---|---|
 | ~~1~~ | ~~T-047~~ | ~~out-of-order 마이그레이션 방침~~ | ✅ 2026-09-17 완료 |
 | ~~2~~ | ~~T-001~~ | ~~`users`·`user_consents` 스키마와 엔티티~~ | ✅ 2026-09-18 완료 |
-| 2 | T-052 | 기준 타임존 KST 런타임 강제 | **예산·배치 Task 전에 처리해야 한다.** 아래 참고 |
+| ~~2~~ | ~~T-052~~ | ~~기준 타임존 KST 런타임 강제~~ | ✅ 2026-09-18 완료 |
 | 3 | T-023 | `budget_periods`·`status_thresholds` 스키마 | T-001만 있으면 된다 |
 | 4 | T-013 | `categories`·`merchant_keyword_rules` 스키마와 시드 | 카테고리 10개는 이미 확정됐다 |
 | 5 | T-006 | `accounts` 스키마와 엔티티 | 코드에프 연동 없이 스키마만 |
@@ -184,8 +184,8 @@ chore/{슬러그}               F-ID 없는 인프라·기술 부채
 | 전체 Task | 52 |
 | 차단 없음 | 42 |
 | 외부 조건에 막힌 것 | 10 |
-| 완료 | 2 (T-047, T-001) |
-| 지금 바로 착수 가능(차단·의존 모두 해소) | 6 |
+| 완료 | 3 (T-047, T-001, T-052) |
+| 지금 바로 착수 가능(차단·의존 모두 해소) | 5 |
 
 차단된 10개의 내역은 이렇다.
 

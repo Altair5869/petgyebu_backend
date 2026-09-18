@@ -24,6 +24,11 @@ RUN groupadd --system app && useradd --system --gid app --home-dir /app app
 COPY --from=build --chown=app:app /workspace/build/libs/*-SNAPSHOT.jar /app/app.jar
 USER app
 
+# 기본 타임존을 KST로 고정한다. eclipse-temurin 이미지와 Cloud Run은 기본이 UTC라,
+# 이걸 두지 않으면 LocalDate.now()나 zone을 빠뜨린 @Scheduled가 UTC로 동작한다.
+# 코드는 AppZone.KST로 존을 명시하는 것이 원칙이고 이 설정은 실수했을 때의 보험이다.
+ENV TZ=Asia/Seoul
+
 # Cloud Run은 PORT 환경변수로 수신 포트를 지정한다.
 ENV PORT=8080
 EXPOSE 8080
