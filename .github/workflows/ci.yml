@@ -22,7 +22,9 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref }}
         run: |
-          git fetch origin "$BASE_REF" --depth=0
+          # checkout이 fetch-depth: 0으로 전체 이력을 받으므로 depth 인자를 주지 않는다.
+          # --depth=0은 git이 거부하는 값이다("depth 0 is not a positive number").
+          git fetch origin "$BASE_REF"
           ./scripts/check-migration-order.sh "origin/$BASE_REF"
 
       - name: Set up JDK 25
