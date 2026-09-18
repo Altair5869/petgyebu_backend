@@ -11,6 +11,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 마이그레이션 순서 검사가 기준 브랜치와 대조해야 해서 전체 이력이 필요하다.
+          fetch-depth: 0
+
+      - name: Check migration order
+        if: github.event_name == 'pull_request'
+        # base_ref를 run 블록에 직접 보간하면 브랜치 이름에 든 셸 메타문자가 그대로
+        # 실행된다(스크립트 인젝션). 환경변수로 받아 따옴표로 감싸 넘긴다.
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          # checkout이 fetch-depth: 0으로 전체 이력을 받으므로 depth 인자를 주지 않는다.
+          # --depth=0은 git이 거부하는 값이다("depth 0 is not a positive number").
+          git fetch origin "$BASE_REF"
+          ./scripts/check-migration-order.sh "origin/$BASE_REF"
 
       - name: Set up JDK 25
         uses: actions/setup-java@v4

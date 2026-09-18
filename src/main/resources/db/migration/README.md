@@ -28,6 +28,23 @@ V202609211015__add_account_reauth_required.sql
 - 설명은 소문자 snake_case로, 무엇을 하는지 동사로 적는다. 구분자는 밑줄 **두 개**다.
 - 적용된 마이그레이션 파일은 절대 수정하지 않는다. Flyway가 체크섬으로 검증해 기동이 실패한다.
   잘못된 것을 고칠 때는 새 마이그레이션을 추가한다.
+- **병합 전에 재타임스탬프한다.** 브랜치를 오래 들고 있었다면 병합 직전에 파일명을 현재 시각으로
+  다시 짓는다. 이미 적용된 것보다 낮은 버전이 나중에 들어오면 `FlywayValidateException`으로
+  기동이 실패하기 때문이다(`spring.flyway.out-of-order: false`).
+
+  ```
+  git mv V202609201000__create_account.sql \
+         V$(TZ=Asia/Seoul date +%Y%m%d%H%M)__create_account.sql
+  ```
+
+  `scripts/check-migration-order.sh`가 CI에서 이를 검사한다. 로컬에서 미리 돌려볼 수도 있다.
+
+  ```
+  ./scripts/check-migration-order.sh
+  ```
+
+  **이 실패는 빈 DB에서 재현되지 않는다.** 새 DB는 어떤 순서로 만들어졌든 오름차순으로 적용해서
+  테스트가 통과한다. 이미 마이그레이션이 적용된 DB에서만 드러나므로 정적 검사가 필요하다.
 
 ## 현재 상태
 

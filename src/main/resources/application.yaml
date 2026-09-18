@@ -16,6 +16,10 @@ spring:
     # 생기면 그 시점의 실제 스키마 버전으로 baseline-version을 올려야 한다.
     baseline-on-migrate: true
     baseline-version: 0
+    # 이미 적용된 것보다 낮은 버전의 마이그레이션이 나중에 들어오면 기동을 거부한다.
+    # 기본값이지만 의도를 분명히 하려고 명시한다. 병합 전 재타임스탬프가 원칙이고,
+    # scripts/check-migration-order.sh가 CI에서 이를 강제한다.
+    out-of-order: false
 
   batch:
     jdbc:
