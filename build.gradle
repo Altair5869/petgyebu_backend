@@ -90,4 +90,10 @@ dependencies {
 
 tasks.named('test') {
 	useJUnitPlatform()
+
+	// 테스트는 일부러 UTC로 돌린다. 운영 컨테이너는 TZ=Asia/Seoul이지만, 여기서도 KST로
+	// 맞춰버리면 JVM 기본 존에 의존하는 코드(LocalDate.now(), zone 없는 @Scheduled)가
+	// 개발자 노트북에서도 CI에서도 통과해 버린다. 존을 명시하지 않은 코드는 여기서 깨져야 한다.
+	// 기준 존이 필요한 곳은 AppZone.KST를 쓴다.
+	systemProperty 'user.timezone', 'UTC'
 }
