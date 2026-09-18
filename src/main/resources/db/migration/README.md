@@ -48,9 +48,14 @@ V202609211015__add_account_reauth_required.sql
 
 ## 현재 상태
 
-아직 마이그레이션 파일이 없다. 엔티티가 하나도 없기 때문이다. 첫 마이그레이션은 Sprint 1의
-Account 엔티티이며, 그때 Spring Batch 메타 테이블(`BATCH_*`)도 같은 방식으로 들어온다
-(`_workspace/sprint0_backend_summary.md` 15장 참고).
+첫 마이그레이션은 T-001의 `users`·`user_consents`다. Sprint 1의 Account가 첫 대상일 것으로
+적어 뒀었으나, 계정이 모든 테이블의 뿌리라 순서가 바뀌었다.
+
+Spring Batch 메타 테이블(`BATCH_*`)은 아직 들어오지 않았다. T-040에서 Spring Batch 배포본의
+`schema-postgresql.sql`을 마이그레이션 파일로 옮긴다. **직접 작성하지 않는다.**
+
+남은 마이그레이션 순서는 `docs/10-task-backlog.md`의 스키마 Task를 따른다.
 
 이 README는 디렉터리를 jar에 남기기 위한 용도도 겸한다. Gradle이 빈 디렉터리를 산출물에 넣지
-않기 때문이다. Flyway는 `V`/`U`/`R` 접두사가 붙은 `.sql` 파일만 읽으므로 이 파일은 무시된다.
+않기 때문이다. 마이그레이션 파일이 생긴 지금도 이 파일을 지우지 않는 이유는 규칙 문서로서의
+역할이 남아 있어서다. Flyway는 `V`/`U`/`R` 접두사가 붙은 `.sql` 파일만 읽으므로 무시된다.
