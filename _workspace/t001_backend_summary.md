@@ -101,9 +101,19 @@ users·user_consents 스키마 제약 검증  tests=4 skipped=0 failures=0 error
 0을 확인한다. 통과했다.
 
 JPA `cascade` 속성이 아니라 DB의 FK 동작을 보는 것이 핵심이라 확인을 JdbcTemplate으로 했다.
-엔티티에는 `cascade`나 `orphanRemoval`을 걸지 않았다. `User`에서 `UserConsent`로 가는 컬렉션
-매핑도 두지 않았다 — 두면 Hibernate가 삭제 전에 자식을 전부 로딩해 개별 DELETE를 날리게 되는데,
-`docs/09-db-design.md` 0장이 정한 "탈퇴는 `DELETE FROM users` 한 번"과 어긋난다.
+엔티티에는 `cascade`나 `orphanRemoval`을 걸지 않았고, `User`에서 `UserConsent`로 가는 컬렉션
+매핑도 두지 않았다.
+
+**정정 (2026-09-18, QA 지적)**: 처음에는 "컬렉션 매핑을 두면 Hibernate가 삭제 전에 자식을 전부
+로딩해 개별 DELETE를 날린다"고 적었으나 이는 사실이 아니다. 그 동작은 `cascade = REMOVE`나
+`orphanRemoval = true`를 함께 걸었을 때 일어난다. `@OneToMany(mappedBy = "user")`만 두고
+cascade를 걸지 않으면 Hibernate는 자식을 건드리지 않고 `delete from users`만 발행하며 뒤처리는
+DB의 `ON DELETE CASCADE`가 한다. 즉 컬렉션 매핑의 존재 자체는 `09-db-design.md` 0장 규약을
+깨지 않는다.
+
+컬렉션을 두지 않은 결론은 유지한다. 근거는 다른 것이다 — cascade를 걸지 않는 한 삭제 경로는
+어느 쪽이든 같고, 지금 읽을 일이 없는 양방향 연관을 미리 만들 이유가 없다. **후속 Task에서
+"컬렉션 매핑 금지"로 확대 적용하지 말 것.**
 
 ### 5. `email`이 null인 사용자
 

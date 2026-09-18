@@ -42,7 +42,7 @@ chore/{슬러그}               F-ID 없는 인프라·기술 부채
 
 | | ID | 제목 | 브랜치 | 완료 기준 | 의존 | 차단 |
 |---|---|---|---|---|---|---|
-| [ ] | T-001 | `users`·`user_consents` 스키마와 엔티티 | `feature/F-QJXRMD-schema` | 마이그레이션 적용 후 `PostgresMigrationTest` 통과. `(provider, provider_user_id)` 유니크 동작 확인 | — | — |
+| [x] | T-001 | `users`·`user_consents` 스키마와 엔티티 | `feature/F-QJXRMD-schema` | ✅ 완료. QA PASS 10 / FIX 2 / REDO 0 | — | — |
 | [ ] | T-002 | 카카오 소셜 로그인 API | `feature/F-QJXRMD-login` | 카카오 인가 코드로 계정 생성·조회가 되고, 신규 가입 시 `requiresConsent`가 내려온다 | T-001 | **B-KAKAO** |
 | [ ] | T-003 | JWT 발급·검증·회전 | `feature/F-QJXRMD-token` | 액세스 30분·리프레시 14일로 발급된다. 리프레시 사용 시 이전 토큰이 폐기되고, 폐기 토큰 재사용이 감지되면 전 세션이 무효화된다 | T-001 | 부분 **B-REDIS** |
 | [ ] | T-004 | 약관·개인정보 동의 API | `feature/F-QJXRMD-consent` | 필수 동의 없이는 가입이 완료되지 않는다. 동의 기록에 종류·버전·시각이 남는다 | T-001 | **B-TERMS** |
@@ -152,6 +152,7 @@ chore/{슬러그}               F-ID 없는 인프라·기술 부채
 | [ ] | T-049 | Cloud Run 플래그 검증 스크립트 보강 | `chore/verify-serving-revision` | `status.latestReadyRevisionName`을 대조해 실제 트래픽 받는 리비전을 검증한다. 애노테이션 키 실물 확인 | — | **B-GCP** |
 | [ ] | T-050 | Redis 헬스 인디케이터 복구 | `chore/enable-redis-health` | `application-local.yaml`의 비활성 설정을 제거한다 | — | **B-REDIS** |
 | [ ] | T-051 | 운영 프로필 springdoc 비활성화 검토 | `chore/springdoc-prod-policy` | 운영에서 API 문서를 노출할지 정하고 반영한다 | — | — |
+| [ ] | T-052 | **기준 타임존 KST 런타임 강제** | `chore/enforce-kst-timezone` | `hibernate.jdbc.time_zone`, JVM `user.timezone`, Dockerfile `TZ` 중 어디서 강제할지 정하고 반영한다. 서버 타임존이 UTC일 때 월 경계·코호트 계산이 어긋나지 않는지 테스트로 확인한다 | — | — |
 
 ---
 
@@ -162,12 +163,15 @@ chore/{슬러그}               F-ID 없는 인프라·기술 부채
 | 순서 | ID | 제목 | 비고 |
 |---|---|---|---|
 | ~~1~~ | ~~T-047~~ | ~~out-of-order 마이그레이션 방침~~ | ✅ 2026-09-17 완료 |
-| 2 | T-001 | `users`·`user_consents` 스키마와 엔티티 | 거의 모든 Task의 뿌리다 |
+| ~~2~~ | ~~T-001~~ | ~~`users`·`user_consents` 스키마와 엔티티~~ | ✅ 2026-09-18 완료 |
+| 2 | T-052 | 기준 타임존 KST 런타임 강제 | **예산·배치 Task 전에 처리해야 한다.** 아래 참고 |
 | 3 | T-023 | `budget_periods`·`status_thresholds` 스키마 | T-001만 있으면 된다 |
 | 4 | T-013 | `categories`·`merchant_keyword_rules` 스키마와 시드 | 카테고리 10개는 이미 확정됐다 |
 | 5 | T-006 | `accounts` 스키마와 엔티티 | 코드에프 연동 없이 스키마만 |
 | 6 | T-041 | 보상·상점 스키마와 시드 | 슬롯 4종도 확정됐다 |
 | 7 | T-051 | 운영 프로필 springdoc 정책 | 작은 결정 |
+
+**T-052를 예산·배치 Task 전에 처리해야 하는 이유** (2026-09-18 T-001 QA에서 발견): `09-db-design.md` 0장이 "기준 타임존 KST 고정"을 정했는데 런타임에 강제하는 설정이 어디에도 없다. `hibernate.jdbc.time_zone`, JVM `user.timezone`, Dockerfile `TZ` 전부 없는 것을 확인했다. 시각을 절대값으로 저장·조회하는 한 문제가 없지만, **날짜로 자르는 계산에서 서버가 UTC면 하루가 어긋난다** — `joined_at` 기반 24시간·7일 코호트(T-001 완료), 월간 예산 기간 경계(T-023·T-026), s9 배치 실행 시각(T-042)이 전부 해당한다.
 
 **스키마 Task를 먼저 몰아서 하는 것이 유리하다.** 외부 의존이 없고, 마이그레이션이 쌓이면 `PostgresMigrationTest`가 그때부터 실질적인 안전망으로 동작한다. API Task는 대부분 카카오·코드에프 승인을 기다려야 한다.
 
@@ -177,10 +181,11 @@ chore/{슬러그}               F-ID 없는 인프라·기술 부채
 
 | 구분 | 개수 |
 |---|---|
-| 전체 Task | 51 |
-| 차단 없음 | 41 |
+| 전체 Task | 52 |
+| 차단 없음 | 42 |
 | 외부 조건에 막힌 것 | 10 |
-| 지금 바로 착수 가능(차단·의존 모두 해소) | 7 |
+| 완료 | 2 (T-047, T-001) |
+| 지금 바로 착수 가능(차단·의존 모두 해소) | 6 |
 
 차단된 10개의 내역은 이렇다.
 

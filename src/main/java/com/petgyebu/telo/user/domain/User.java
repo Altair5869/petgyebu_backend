@@ -46,8 +46,14 @@ public class User {
 
 	private OffsetDateTime characterChangedAt;
 
-	/** KPI 코호트 기준 t=0. DB에도 {@code DEFAULT now()}가 있지만 값은 애플리케이션이 채운다. */
-	@Column(nullable = false)
+	/**
+	 * KPI 코호트 기준 t=0. DB에도 {@code DEFAULT now()}가 있지만 값은 애플리케이션이 채운다.
+	 * {@code insertable = false}로 두면 저장 직후 객체 필드가 null이라 응답에 쓸 수 없다.
+	 *
+	 * <p>{@code updatable = false}인 이유: 가입 후 24시간·7일 코호트의 기준점이라 한 번 정해지면
+	 * 바뀌면 안 된다. 실수로 갱신되는 경로를 매핑 단계에서 막는다.
+	 */
+	@Column(nullable = false, updatable = false)
 	private OffsetDateTime joinedAt;
 
 	private OffsetDateTime lastLoginAt;
