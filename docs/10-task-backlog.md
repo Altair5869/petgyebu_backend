@@ -91,9 +91,9 @@ chore/{슬러그}               F-ID 없는 인프라·기술 부채
 
 | | ID | 제목 | 브랜치 | 완료 기준 | 의존 | 차단 |
 |---|---|---|---|---|---|---|
-| [ ] | T-023 | `budget_periods`·`status_thresholds` 스키마와 엔티티 | `feature/F-FZUVLV-schema` | 마이그레이션 적용. `(user_id, period_start)` 유니크 동작 | T-001 | — |
+| [x] | T-023 | `budget_periods`·`status_thresholds` 스키마와 엔티티 | `feature/F-FZUVLV-schema` | ✅ 완료. QA PASS 9 / FIX 1 / REDO 0 | T-001 | #16 |
 | [ ] | T-024 | **소비 지출 집계 함수 (공통)** | `feature/F-FZUVLV-expense-aggregation` | 이체 제외·환불 순액·가계부 제외 계좌 제외가 모두 반영된다. **예산·캐릭터 상태·소비 요약·카테고리 분석이 전부 이 함수를 쓴다** | T-018, T-022 | — |
-| [ ] | T-025 | 예산 설정 API와 구간 검증 | `feature/F-FZUVLV-api` | 0% 고정·오름차순·중복·공백·6단계 누락 검증이 각각 해당 행을 지목하며 저장을 막는다. 기본값 6단계가 프리필된다 | T-023 | — |
+| [ ] | T-025 | 예산 설정 API와 구간 검증 | `feature/F-FZUVLV-api` | 0% 고정·오름차순·중복·공백·6단계 누락 검증이 각각 해당 행을 지목하며 저장을 막는다. 기본값 6단계가 프리필된다 | T-023 | `updated_at` 자동 갱신 수단(`@PreUpdate` vs Auditing)을 T-023에서 미결로 넘겼다. 목표 금액 수정 API가 생기는 순간 정해야 한다 |
 | [ ] | T-026 | 사용률 계산과 경계값 판정 | `feature/F-FZUVLV-usage-rate` | 오른쪽 닫힘 `(시작, 끝]` 판정. **40%는 "기상"이 아니라 "휴식"**, 0%는 첫 구간에 포함. 목표 수정 시 스냅샷은 불변 | T-024, T-025 | — |
 | [ ] | T-027 | 캐릭터 선택 API | `feature/F-GGIDHG-api` | 선택·변경이 저장되고 변경 시각이 남는다 | T-001 | — |
 | [ ] | T-028 | 거래 분류·유형 수정 API와 이력 | `feature/F-KBBFRU-edit` | 수정이 집계에 즉시 반영된다. **`initial_classification_source`는 갱신되지 않는다**(`updatable = false` 확인) | T-022, T-024 | — |
@@ -165,7 +165,7 @@ chore/{슬러그}               F-ID 없는 인프라·기술 부채
 | ~~1~~ | ~~T-047~~ | ~~out-of-order 마이그레이션 방침~~ | ✅ 2026-09-17 완료 |
 | ~~2~~ | ~~T-001~~ | ~~`users`·`user_consents` 스키마와 엔티티~~ | ✅ 2026-09-18 완료 |
 | ~~2~~ | ~~T-052~~ | ~~기준 타임존 KST 런타임 강제~~ | ✅ 2026-09-18 완료 |
-| 3 | T-023 | `budget_periods`·`status_thresholds` 스키마 | T-001만 있으면 된다 |
+| ~~3~~ | ~~T-023~~ | ~~`budget_periods`·`status_thresholds` 스키마~~ | ✅ 2026-09-20 완료 |
 | 4 | T-013 | `categories`·`merchant_keyword_rules` 스키마와 시드 | 카테고리 10개는 이미 확정됐다 |
 | 5 | T-006 | `accounts` 스키마와 엔티티 | 코드에프 연동 없이 스키마만 |
 | 6 | T-041 | 보상·상점 스키마와 시드 | 슬롯 4종도 확정됐다 |
