@@ -77,3 +77,50 @@ BUILD SUCCESSFUL in 37s
   그 인덱스를 쓰는 쿼리 메서드는 T-025/s9 배치 Task에서 추가한다.
 - `updated_at` 자동 갱신 수단(`@PreUpdate` 또는 Auditing)을 정하지 않았다. 지금은 수정 경로가
   없어 문제되지 않지만, T-025에서 목표 금액 수정 API가 생기면 결정해야 한다.
+
+---
+
+## QA 지적 반영 (FIX 1건)
+
+`(user_id, period_start)` 유니크 테스트가 제약의 **범위**를 증명하지 못한다는 지적. 제약을
+`UNIQUE (user_id)`로 좁혀도 7건이 전부 통과했다 — 각 테스트가 서로 다른 사용자를 쓰고, 한 사용자가
+두 달을 갖는 경우를 아무도 저장하지 않았기 때문이다.
+
+- [완료] `BudgetSchemaTest.consecutiveMonthPeriodsForSameUserAreAllowed()` 추가 — 같은 사용자가
+  9월(`2026-09-01~09-30`)과 10월(`2026-10-01~10-31`) 기간을 둘 다 저장할 수 있고 행이 2개임을 단언.
+  F-FZUVLV action "기간 종료 시 다음 기간 자동 생성"(s9 배치)이 이 동작에 의존한다
+- [완료] 유니크 위반 단언 두 곳에 `.rootCause().hasMessageContaining("<제약명>")` 추가 —
+  `uq_budget_periods_user_id_period_start`, `uq_status_thresholds_period_status`.
+  NOT NULL·CHECK 위반으로 실패해도 초록이 되던 것을 막는다
+- 프로덕션 코드와 마이그레이션은 건드리지 않았다(`git diff --stat`이 테스트 파일 1개만 보고한다)
+
+### 검증 — `--rerun-tasks`로만 판단했다
+
+```
+BUILD SUCCESSFUL in 42s
+7 actionable tasks: 7 executed
+```
+
+`budget_periods·status_thresholds 스키마 제약 검증: tests=8 failures=0 skipped=0`.
+(`--rerun-tasks` 없이 돌리면 `7 up-to-date`로 테스트가 아예 실행되지 않는다.)
+
+**변이 1 — 제약을 `UNIQUE (user_id)`로 좁힘** (QA가 지적한, s9 배치를 막는 치명적 스키마):
+
+```
+> 같은 사용자가 서로 다른 달의 예산 기간을 함께 가질 수 있다 — s9 배치의 다음 기간 생성 FAILED
+8 tests completed, 1 failed
+```
+
+새 테스트가 정확히 이 변이를 잡는다. 기존 7건은 여전히 통과 — 지적이 정확했다.
+
+**변이 2 — 제약 이름만 `uq_bp_renamed`/`uq_st_renamed`로 변경**(열 구성은 그대로):
+
+```
+> 같은 기간에 같은 상태 구간을 두 번 저장할 수 없다 FAILED
+> 같은 사용자·같은 달 예산 기간은 두 번 저장할 수 없다 — s9 배치 중복 실행 방어 FAILED
+8 tests completed, 2 failed
+```
+
+제약명 단언이 실제로 동작한다(이름을 확인하지 않던 이전 테스트는 이 변이를 통과했을 것이다).
+
+두 변이 모두 원복 후 `BUILD SUCCESSFUL in 42s / 7 actionable tasks: 7 executed`.

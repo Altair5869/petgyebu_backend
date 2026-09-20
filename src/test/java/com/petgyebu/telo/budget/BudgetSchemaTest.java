@@ -46,6 +46,8 @@ class BudgetSchemaTest {
 
 	private static final LocalDate SEPTEMBER_START = LocalDate.of(2026, 9, 1);
 	private static final LocalDate SEPTEMBER_END = LocalDate.of(2026, 9, 30);
+	private static final LocalDate OCTOBER_START = LocalDate.of(2026, 10, 1);
+	private static final LocalDate OCTOBER_END = LocalDate.of(2026, 10, 31);
 
 	@Autowired
 	private UserRepository userRepository;
@@ -68,7 +70,29 @@ class BudgetSchemaTest {
 		assertThatThrownBy(() -> budgetPeriodRepository.saveAndFlush(septemberPeriod(user, 500_000L)))
 				.as("UNIQUE (user_id, period_start)가 걸려 있지 않다. s9 배치가 중복 실행되면 "
 						+ "같은 달 예산 기간이 둘 생긴다")
-				.isInstanceOf(DataIntegrityViolationException.class);
+				.isInstanceOf(DataIntegrityViolationException.class)
+				// 어떤 제약이 걸었는지까지 본다. 이름을 확인하지 않으면 NOT NULL이나 CHECK 위반으로
+				// 실패해도 이 테스트가 초록이 된다.
+				.rootCause()
+				.hasMessageContaining("uq_budget_periods_user_id_period_start");
+	}
+
+	@Test
+	@DisplayName("같은 사용자가 서로 다른 달의 예산 기간을 함께 가질 수 있다 — s9 배치의 다음 기간 생성")
+	void consecutiveMonthPeriodsForSameUserAreAllowed() {
+		User user = givenUser("budget-next-month-1");
+		budgetPeriodRepository.saveAndFlush(septemberPeriod(user, 300_000L));
+
+		BudgetPeriod october = budgetPeriodRepository.saveAndFlush(
+				period(user, OCTOBER_START, OCTOBER_END, 300_000L));
+
+		// 유니크가 (user_id, period_start)가 아니라 (user_id)에 걸리면 여기서 깨진다. 그 스키마는
+		// F-FZUVLV action "기간 종료 시 다음 기간 자동 생성"(s9 배치)을 통째로 막는다.
+		assertThat(october.getId()).isNotNull();
+		assertThat(count(new JdbcTemplate(dataSource),
+				"SELECT count(*) FROM budget_periods WHERE user_id = ?", user.getId()))
+				.as("한 사용자가 두 달치 예산 기간을 가질 수 없다. s9 배치가 다음 달 기간을 만들지 못한다")
+				.isEqualTo(2);
 	}
 
 	@Test
@@ -91,7 +115,9 @@ class BudgetSchemaTest {
 		assertThatThrownBy(() -> statusThresholdRepository.saveAndFlush(
 				threshold(period, StatusCode.REST, "0.00", "50.00", (short) 1)))
 				.as("UNIQUE (budget_period_id, status_code)가 걸려 있지 않다")
-				.isInstanceOf(DataIntegrityViolationException.class);
+				.isInstanceOf(DataIntegrityViolationException.class)
+				.rootCause()
+				.hasMessageContaining("uq_status_thresholds_period_status");
 	}
 
 	@Test
@@ -171,8 +197,11 @@ class BudgetSchemaTest {
 	}
 
 	private BudgetPeriod septemberPeriod(User user, long targetAmount) {
-		return new BudgetPeriod(
-				user, SEPTEMBER_START, SEPTEMBER_END, targetAmount, OffsetDateTime.now(AppZone.clock()));
+		return period(user, SEPTEMBER_START, SEPTEMBER_END, targetAmount);
+	}
+
+	private BudgetPeriod period(User user, LocalDate start, LocalDate end, long targetAmount) {
+		return new BudgetPeriod(user, start, end, targetAmount, OffsetDateTime.now(AppZone.clock()));
 	}
 
 	private StatusThreshold threshold(
