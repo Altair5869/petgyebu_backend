@@ -23,7 +23,7 @@ SendMessage로 직접 수정 요청을 주고받아 왕복 비용을 줄인다.
 | 팀원 | 에이전트 타입 | 역할 | 사용 스킬 | 출력 |
 |------|-------------|------|----------|------|
 | backend-engineer | 커스텀 (`.Codex/agents/backend-engineer.md`) | 엔티티/API/배치/코드에프 연동 구현 | lean-build, surgical-patch, migration, investigate-first | `_workspace/{sprint}_backend_summary.md` |
-| qa-reviewer | 커스텀 (`.Codex/agents/qa-reviewer.md`), `general-purpose` 타입으로 스폰 | 통합 정합성·스펙 준수 검증 | investigate-first, verify-and-stop, caveman-review | `_workspace/{sprint}_qa_report.md` |
+| qa-reviewer | 커스텀 (`.Codex/agents/qa-reviewer.md`), `general-purpose` 타입으로 스폰 | 통합 정합성·스펙 준수 검증 | investigate-first, verify-and-stop | `_workspace/{sprint}_qa_report.md` |
 
 ## 워크플로우
 
