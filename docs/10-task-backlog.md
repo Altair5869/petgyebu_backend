@@ -61,8 +61,8 @@ chore/{슬러그}               F-ID 없는 인프라·기술 부채
 | [ ] | T-006 | `accounts` 스키마와 엔티티 | `feature/F-TEDWWF-schema` | 마이그레이션 적용, `PostgresMigrationTest` 통과. `bank_code`가 VARCHAR라 앞자리 0이 보존된다 | T-001 | — |
 | [ ] | T-007 | 금융 데이터 조회 동의 API | `feature/F-TEDWWF-consent` | 동의 없이 계좌 연결을 시작할 수 없다. 가입 시 동의와 분리 기록된다 | T-004, T-006 | — |
 | [ ] | T-008 | 코드에프 SDK 연동 골격 (SANDBOX) | `feature/F-TEDWWF-codef-client` | SANDBOX 자격증명으로 API 호출이 왕복한다. `EasyCodefUtil.encryptRSA()` 사용 경로 확인 | T-006 | — |
-| [ ] | T-009 | 계좌 연결 시작·2-way 추가인증 콜백 | `feature/F-TEDWWF-connect` | 인증 성공 시 코드에프가 반환한 계좌 목록 **전체가 배열로** 저장된다. 2-way 상태가 Upstash에 TTL로 저장된다 | T-008 | **B-CODEF**, **B-REDIS** |
-| [ ] | T-010 | 계좌 목록·해제 API | `feature/F-TEDWWF-manage` | 해제 후 동기화 대상에서 빠진다. 해제 시 connectedId가 해지된다 | T-009 | — |
+| [ ] | T-009 | 계좌 연결 시작·2-way 추가인증 콜백 | `feature/F-TEDWWF-connect` | 인증 성공 시 코드에프가 반환한 계좌 목록 **전체가 배열로** 저장된다. 2-way 상태가 Upstash에 TTL로 저장된다 | T-008 | **B-CODEF**, **B-REDIS**. T-006에서 `accounts` 상태 전이 메서드(`EXPIRED`·`REVOKED`·재인증·집계 제외)와 `updated_at` 갱신 수단을 미결로 넘겼다. |
+| [ ] | T-010 | 계좌 목록·해제 API | `feature/F-TEDWWF-manage` | 해제 후 동기화 대상에서 빠진다. 해제 시 connectedId가 해지된다 | T-009 | `included_in_budget = TRUE`인데 `display_mode = 'HIDDEN'`인 행이 존재할 수 있다(T-006에서 DB 제약으로 표현하지 않기로 함). 읽는 쪽이 무시해야 한다 |
 | [ ] | T-011 | 재인증 필요 상태와 사용자 유도 | `feature/F-TEDWWF-reauth` | 동의 만료·인증 실패 시 `reauth_required`가 켜지고 목록 응답에 노출된다 | T-010 | — |
 | [ ] | T-012 | 탈퇴 시 connectedId 해지 연동 | `chore/withdrawal-codef-revoke` | 탈퇴 시 연결된 모든 계좌가 해지된다. 해지 실패해도 삭제는 진행되고 실패 건이 기록된다 | T-005, T-010 | — |
 
@@ -76,7 +76,7 @@ chore/{슬러그}               F-ID 없는 인프라·기술 부채
 |---|---|---|---|---|---|---|
 | [ ] | T-013 | `categories`·`merchant_keyword_rules` 스키마와 시드 | `feature/F-OAVYWT-category-schema` | 카테고리 10개가 시드로 들어간다. `keywords`에 GIN 인덱스가 생성된다 | T-001 | — |
 | [ ] | T-014 | `transactions`·`transfer_links`·`sync_attempts` 스키마와 엔티티 | `feature/F-OAVYWT-schema` | 마이그레이션 적용, 유니크·부분 인덱스 전부 생성 확인 | T-006, T-013 | — |
-| [ ] | T-015 | 코드에프 거래 조회 연동과 90일 페이지네이션 | `feature/F-OAVYWT-fetch` | 90일치가 페이지 단위 순차 호출로 전부 수집된다. 단일 호출로 안 채워지는 경우를 재현해 확인 | T-008, T-014 | **B-CODEF** |
+| [ ] | T-015 | 코드에프 거래 조회 연동과 90일 페이지네이션 | `feature/F-OAVYWT-fetch` | 90일치가 페이지 단위 순차 호출로 전부 수집된다. 단일 호출로 안 채워지는 경우를 재현해 확인 | T-008, T-014 | **B-CODEF**. T-006에서 `accounts` 상태 전이 메서드(`EXPIRED`·`REVOKED`·재인증·집계 제외)와 `updated_at` 갱신 수단을 미결로 넘겼다. |
 | [ ] | T-016 | 중복 거래 판정과 저장 | `feature/F-OAVYWT-dedup` | 같은 거래를 두 번 수집해도 행이 늘지 않는다. 유니크 제약 위반이 정상 처리된다 | T-015 | — |
 | [ ] | T-017 | 이체 후보 매칭 함수 | `feature/F-OAVYWT-transfer-match` | 조건 3개(금액 완전 일치 + 10분 이내 + 연결된 계좌 쌍)를 AND로 검사한다. 하나의 출금에 여러 입금이 대응하면 자동 연결하지 않는다. **F-KBBFRU에서 재사용 가능한 형태로 분리** | T-016 | — |
 | [ ] | T-018 | 환불 순액 처리 | `feature/F-OAVYWT-refund` | 원거래와 환불이 각각 행으로 저장되고 연결된다. 집계 시 순액이 반영된다 | T-016 | — |
