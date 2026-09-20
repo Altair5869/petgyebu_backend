@@ -1,7 +1,7 @@
 # 트러블슈팅 기록
 
 - 관련 프로젝트: 반려동물 감정 기반 소비 관리 가계부 앱 (Java 25 / Spring Boot 4.0 / PostgreSQL 16)
-- 최종 갱신: 2026-09-20
+- 최종 갱신: 2026-09-21
 - 목적: 개발 과정에서 실제로 마주친 문제와 진단·해결 과정을 기록한다. 증상과 해결만이 아니라 **어떻게 원인에 도달했고 왜 그 방법을 골랐는지**를 남긴다.
 
 각 항목은 관련 PR 번호를 달았다. 실제 커밋과 CI 실행 기록으로 확인할 수 있다.
@@ -30,8 +30,9 @@
 | 14 | 포트 점유로 이전 컨테이너 응답을 오인 | 검증 방법 | — |
 | 15 | `git reset --hard`로 커밋 전 작업 유실 | 작업 실수 | — |
 | 16 | 마이그레이션 순서 검사가 커밋 전에는 조용히 건너뛴다 | 검증 방법 | #16 |
+| 17 | 인덱스를 지워도 빌드와 스키마 테스트가 전부 통과한다 | **조용한 실패** / 테스트 설계 | #18 |
 
-**가장 많이 나온 유형은 "조용한 실패"다.** 빌드도 기동도 성공하는데 기능만 비어 있는 경우가 5건이었다. 이 유형이 위험한 이유는 아래 마지막 절에 정리했다.
+**가장 많이 나온 유형은 "조용한 실패"다.** 빌드도 기동도 성공하는데 기능만 비어 있는 경우가 6건이었다. 이 유형이 위험한 이유는 아래 마지막 절에 정리했다.
 
 ---
 
@@ -566,11 +567,135 @@ added=$(git diff --name-only --diff-filter=A "$BASE...HEAD" -- "$MIGRATION_DIR" 
 
 ---
 
+## 17. 인덱스를 지워도 빌드와 스키마 테스트가 전부 통과한다
+
+**증상**
+
+T-006(`accounts` 스키마)의 QA 검증 중, 마이그레이션에서 `CREATE INDEX` 2줄을 통째로
+지우고 돌렸는데 아무것도 빨간불이 되지 않았다.
+
+```
+$ # V202609202355__create_accounts.sql 에서 CREATE INDEX 2줄 삭제
+BUILD SUCCESSFUL
+9 tests completed, 0 failed
+```
+
+`PostgresMigrationTest`(Flyway + `ddl-auto: validate`)도, 제약 테스트 8건도 전부 통과했다.
+인덱스가 스키마에서 사라졌는데 검증망 어디에도 걸리지 않는다.
+
+**진단**
+
+QA가 유니크 제약 쪽에서는 변이 5회로 **각 열까지 고정돼 있음**을 확인한 직후였다.
+같은 방식(열 하나씩 빼고 돌리기)을 인덱스에 적용했더니 전부 초록이었다. 제약은
+잡히는데 인덱스만 안 잡힌다는 비대칭이 단서였다.
+
+두 가지를 차례로 확인했다.
+
+1. `ddl-auto: validate`의 검사 범위 — 테이블·열·타입·nullable은 보지만 인덱스는 보지 않는다.
+   `bank_code`를 `BIGINT`로 바꿨을 때는 컨텍스트 로딩 단계에서 9건 전부 죽었는데
+   (`String` 필드 ↔ `BIGINT` 열 불일치), 인덱스를 지울 때는 아무 반응이 없었다
+2. 제약 테스트가 무엇을 보는가 — 전부 "이 INSERT가 거부되는가 / 허용되는가"다.
+   즉 **결과**를 본다
+
+그래서 원인 축이 여기 있다는 결론에 닿았다. **제약은 틀린 답을 내게 하지만, 인덱스는
+느린 답을 내게 한다.**
+
+**원인**
+
+인덱스 부재는 쿼리 결과를 바꾸지 않는다. 같은 행이 같은 순서로 나오고, 다만 풀스캔이
+될 뿐이다. 결과를 단언하는 테스트로는 **원리적으로** 잡을 수 없다. 그리고 `validate`의
+검사 범위에도 인덱스가 없으므로, 마이그레이션에서 인덱스가 조용히 사라져도 빌드는
+끝까지 초록이다.
+
+`accounts`의 `ix_accounts_consent_status_last_synced_at`는 동기화 스케줄러가 대상 계좌를
+고르는 경로다. 이것이 사라진 채 병합됐다면 계좌가 늘어난 뒤 운영에서야 드러났을 것이다.
+
+**해결**
+
+결과가 아니라 **스키마 자체**를 조회해 단언했다. `pg_indexes`의 `indexdef`를 읽어
+이름과 대상 열 구성을 함께 본다.
+
+```java
+private void assertIndex(String tableName, String indexName, String expectedColumns) {
+	List<String> definitions = new JdbcTemplate(dataSource).queryForList(
+			"SELECT indexdef FROM pg_indexes "
+					+ "WHERE schemaname = 'public' AND tablename = ? AND indexname = ?",
+			String.class, tableName, indexName);
+
+	assertThat(definitions).as("%s 테이블에 인덱스 %s가 없다", tableName, indexName).hasSize(1);
+	assertThat(definitions.get(0))
+			.as("인덱스 %s의 대상 열 구성이 설계와 다르다", indexName)
+			.endsWith("(" + expectedColumns + ")");
+}
+```
+
+`endsWith`로 괄호 안 열 목록을 통째로 맞춰 보므로 열의 **순서**와 **정렬 방향(DESC)**까지
+고정된다. 세 스키마 테스트(`UserSchemaTest`·`BudgetSchemaTest`·`AccountSchemaTest`)에
+같은 모양으로 넣어 인덱스 6개를 덮었다. 테스트 간 공유 유틸리티 클래스는 만들지 않았다.
+기존 세 테스트가 각각 독립적인 구조라 그 구조를 유지했다.
+
+**검증**
+
+인덱스 6개를 각각 **삭제**(3회)하거나 **이름은 그대로 둔 채 대상 열만 변경**(3회)해
+돌렸다. 마이그레이션은 매회 백업에서 원복했다.
+
+```
+### 변이1: ix_users_joined_at 삭제
+users·user_consents 스키마 제약 검증 > 설계한 인덱스가 실제로 만들어져 있다 — 이름과 대상 열 구성까지 FAILED
+5 tests completed, 1 failed / BUILD FAILED in 37s
+
+### 변이2: ix_user_consents_user_id_type_consented_at 의 DESC 제거 (이름 유지)
+5 tests completed, 1 failed / BUILD FAILED in 37s
+
+### 변이3: ix_budget_periods_user_id_status 삭제
+9 tests completed, 1 failed / BUILD FAILED in 37s
+
+### 변이4: ix_budget_periods_status_period_end (status, period_end) → (period_end, status) (이름 유지)
+9 tests completed, 1 failed / BUILD FAILED in 37s
+
+### 변이5: ix_accounts_user_id 삭제
+9 tests completed, 1 failed / BUILD FAILED in 37s
+
+### 변이6: ix_accounts_consent_status_last_synced_at 에서 last_synced_at 열 제거 (이름 유지)
+9 tests completed, 1 failed / BUILD FAILED in 37s
+```
+
+**반영 전에는 같은 변이가 `BUILD SUCCESSFUL`이었다.** 이것이 양방향의 한쪽이다.
+
+다른 한쪽은 실패 건수에 있다. 6회 모두 실패한 것은 **새 인덱스 테스트 하나뿐**이다
+(`9 tests completed, 1 failed`). 다른 테스트는 인덱스에 전혀 반응하지 않는다는 뜻이고,
+곧 이 구멍은 별도 단언 없이는 메울 수 없다는 증거다.
+
+반영 후 전체 빌드는 초록이다.
+
+```
+$ ./gradlew build --rerun-tasks
+BUILD SUCCESSFUL in 45s
+7 actionable tasks: 7 executed
+```
+
+세 스키마 테스트가 각각 1건씩 늘어 29 → 32건이 됐다.
+
+**배운 것**
+
+**이름 단언과 열 구성 단언은 서로를 대체하지 않는다.** 변이 2·4·6은 인덱스 이름을
+유지한 채 열 구성만 바꿨다. 존재 여부만 봤다면 전부 통과했을 것이다. 같은 교훈이
+T-023의 유니크 제약에서도 나왔는데(이름만 확인하면 제약을 `UNIQUE (user_id)`로 좁혀도
+중복 거부 테스트는 통과한다), 그때는 제약 이름과 열 범위의 문제였고 여기서는 인덱스
+이름과 열 구성의 문제다. **식별자가 맞다는 것과 정의가 맞다는 것은 다른 말이다.**
+
+더 일반적으로는, **테스트가 보는 축이 하나 부족하면 그 축의 결함은 통째로 안 보인다.**
+제약 테스트는 "결과" 축만 봤고, 성능에만 영향을 주는 스키마 요소는 그 축에 아예
+투영되지 않았다. 10번(local 프로필 테스트가 운영 스키마 경로를 검증하지 않음)과 같은
+모양의 실패다.
+
+---
+
 ## 되짚어 보기
 
 ### 조용한 실패가 가장 많았다
 
-16건 중 5건(3·4·9·10·11번)이 **빌드도 기동도 성공하는데 기능만 비어 있는** 유형이었다.
+17건 중 6건(3·4·9·10·11·17번)이 **빌드도 기동도 성공하는데 기능만 비어 있는** 유형이었다.
 
 | 사례 | 겉보기 | 실제 |
 |---|---|---|
@@ -579,6 +704,7 @@ added=$(git diff --name-only --diff-filter=A "$BASE...HEAD" -- "$MIGRATION_DIR" 
 | CI 자격증명 없음 | 잡 성공 | 배포·검증 스텝 전부 스킵 |
 | local 프로필 테스트 | 테스트 통과 | 운영 스키마 경로 미검증 |
 | out-of-order 마이그레이션 | 새 DB에서 통과 | 운영 DB에서만 실패 |
+| 인덱스 누락 | 빌드 통과, 스키마 테스트 8건 전부 통과 | 인덱스 0개, 조회가 풀스캔 |
 
 공통점이 있다. **성공 신호가 있어서 더 위험하다.** 에러가 나면 고치게 되지만 이들은 "잘 되고 있다"는 잘못된 확신을 준다.
 
@@ -592,6 +718,7 @@ added=$(git diff --name-only --diff-filter=A "$BASE...HEAD" -- "$MIGRATION_DIR" 
 - Flyway: `spring-boot-flyway`를 빼면 정말 조용히 실패하는지
 - 마이그레이션 테스트: 마이그레이션 없이 엔티티만 추가하면 정말 실패하는지
 - CI 가드: 낮은 버전을 넣으면 정말 빌드가 깨지는지
+- 인덱스 단언: 인덱스를 지우거나 대상 열을 바꾸면 정말 테스트가 깨지는지
 
 통과만 확인하면 "원래부터 통과했을" 가능성을 배제할 수 없다. **막으려던 것이 실제로 막히는지 확인해야 그 방어가 작동한다고 말할 수 있다.**
 
