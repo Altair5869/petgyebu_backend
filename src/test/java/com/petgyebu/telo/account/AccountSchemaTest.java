@@ -12,6 +12,7 @@ import com.petgyebu.telo.user.domain.AuthProvider;
 import com.petgyebu.telo.user.domain.User;
 import com.petgyebu.telo.user.repository.UserRepository;
 import java.time.OffsetDateTime;
+import java.util.List;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -203,6 +204,42 @@ class AccountSchemaTest {
 							.isNull();
 					assertThat(found.getAccountName()).isNull();
 				});
+	}
+
+	@Test
+	@DisplayName("설계한 인덱스가 실제로 만들어져 있다 — 이름과 대상 열 구성까지")
+	void designedIndexesExist() {
+		// 계좌 목록 조회용.
+		assertIndex("accounts", "ix_accounts_user_id", "user_id");
+		// 스케줄러가 동기화 대상 계좌를 고를 때.
+		assertIndex("accounts", "ix_accounts_consent_status_last_synced_at",
+				"consent_status, last_synced_at");
+	}
+
+	/**
+	 * 인덱스가 설계대로 존재하는지 본다.
+	 *
+	 * <p>인덱스는 틀린 답이 아니라 느린 답을 낸다. {@code CREATE INDEX}를 통째로 지워도
+	 * {@code ddl-auto: validate}도, 제약 테스트도, 빌드도 전부 통과한다. 그래서 스키마를
+	 * 직접 조회해 못 박는 단언이 따로 필요하다.
+	 *
+	 * <p>이름만 보지 않고 {@code indexdef}의 대상 열 구성까지 본다. 이름을 유지한 채 열만
+	 * 바꾸는 변이는 이름 단언을 통과하기 때문이다.
+	 *
+	 * @param expectedColumns {@code indexdef} 괄호 안에 그대로 나타나야 하는 열 목록
+	 */
+	private void assertIndex(String tableName, String indexName, String expectedColumns) {
+		List<String> definitions = new JdbcTemplate(dataSource).queryForList(
+				"SELECT indexdef FROM pg_indexes "
+						+ "WHERE schemaname = 'public' AND tablename = ? AND indexname = ?",
+				String.class, tableName, indexName);
+
+		assertThat(definitions)
+				.as("%s 테이블에 인덱스 %s가 없다", tableName, indexName)
+				.hasSize(1);
+		assertThat(definitions.get(0))
+				.as("인덱스 %s의 대상 열 구성이 설계와 다르다", indexName)
+				.endsWith("(" + expectedColumns + ")");
 	}
 
 	private User givenUser(String providerUserId) {
