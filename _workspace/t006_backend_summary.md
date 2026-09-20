@@ -150,3 +150,137 @@ BUILD FAILED in 37s
 - **트러블슈팅 기록 없음.** 이번 작업에서 한 단계 이상 추론이 필요한 문제가 없었다.
   마이그레이션 순서 스크립트의 "건너뛴다 = 통과"와 `--rerun-tasks` 없이는 테스트가 돌지
   않는 문제는 이미 각각 기록돼 있고 이번에는 그대로 피해 갔다.
+
+---
+
+## QA 지적 반영 (FIX 1건 — 인덱스 단언 누락)
+
+QA 결과 PASS 11 / FIX 1. FIX는 인덱스 단언 누락이며, 사용자 확인을 받아 **세 테스트 모두**
+같은 방식으로 고쳤다.
+
+### 문제
+
+QA가 `CREATE INDEX` 2줄을 통째로 지우고 돌렸는데 `BUILD SUCCESSFUL`, 8건 전부 통과했다.
+`ddl-auto: validate`는 인덱스를 보지 않고, 인덱스는 **틀린 답이 아니라 느린 답**을 내므로
+제약 테스트로는 원리적으로 잡히지 않는다. 마이그레이션에서 조용히 사라져도 아무것도
+빨간불이 되지 않는 구멍이었다.
+
+### 고친 것 (테스트 파일 3개만)
+
+마이그레이션·엔티티·프로덕션 코드는 건드리지 않았다.
+
+| 파일 | 추가 |
+|---|---|
+| `src/test/java/com/petgyebu/telo/user/UserSchemaTest.java` | `designedIndexesExist` + `assertIndex` 헬퍼 |
+| `src/test/java/com/petgyebu/telo/budget/BudgetSchemaTest.java` | 같음 |
+| `src/test/java/com/petgyebu/telo/account/AccountSchemaTest.java` | 같음 |
+
+세 파일이 **같은 모양의 헬퍼**를 각자 갖는다. 공유 유틸리티 클래스는 만들지 않았다 —
+기존 세 테스트가 각각 독립적인 구조라 그 구조를 유지했다.
+
+```java
+private void assertIndex(String tableName, String indexName, String expectedColumns) {
+    List<String> definitions = new JdbcTemplate(dataSource).queryForList(
+            "SELECT indexdef FROM pg_indexes "
+                    + "WHERE schemaname = 'public' AND tablename = ? AND indexname = ?",
+            String.class, tableName, indexName);
+
+    assertThat(definitions).as("%s 테이블에 인덱스 %s가 없다", tableName, indexName).hasSize(1);
+    assertThat(definitions.get(0))
+            .as("인덱스 %s의 대상 열 구성이 설계와 다르다", indexName)
+            .endsWith("(" + expectedColumns + ")");
+}
+```
+
+**이름만 보지 않는다.** `pg_indexes.indexdef`의 괄호 안 열 목록을 그대로 맞춰 본다.
+`endsWith`를 쓰므로 열의 **순서**와 **정렬 방향(DESC)**까지 고정된다. T-023·T-006에서
+반복 확인된 교훈 — 이름을 유지한 채 열 구성만 바꾸는 변이는 이름 단언을 통과한다 — 이
+여기에도 그대로 적용된다.
+
+고정한 인덱스 6개:
+
+| 테이블 | 인덱스 | 단언한 열 구성 |
+|---|---|---|
+| `users` | `ix_users_joined_at` | `joined_at` |
+| `user_consents` | `ix_user_consents_user_id_type_consented_at` | `user_id, consent_type, consented_at DESC` |
+| `budget_periods` | `ix_budget_periods_user_id_status` | `user_id, status` |
+| `budget_periods` | `ix_budget_periods_status_period_end` | `status, period_end` |
+| `accounts` | `ix_accounts_user_id` | `user_id` |
+| `accounts` | `ix_accounts_consent_status_last_synced_at` | `consent_status, last_synced_at` |
+
+DEFAULT 값 단언은 넣지 않았다. QA가 우선순위 낮음으로 판정했다 — 애플리케이션 경로에서
+엔티티가 항상 값을 채워 DEFAULT가 발화하지 않는다.
+
+### 양방향 증명 — 변이 6회 실제 출력
+
+인덱스 6개를 각각 지우거나(3회) 이름은 그대로 둔 채 대상 열만 바꿔(3회) 돌렸다.
+마이그레이션 파일은 변이 전 백업해 두고 매회 원복했다.
+
+```
+### 변이1: ix_users_joined_at 삭제
+users·user_consents 스키마 제약 검증 > 설계한 인덱스가 실제로 만들어져 있다 — 이름과 대상 열 구성까지 FAILED
+> Task :test FAILED
+5 tests completed, 1 failed
+BUILD FAILED in 37s
+
+### 변이2: ix_user_consents_user_id_type_consented_at 의 DESC 제거 (이름 유지)
+users·user_consents 스키마 제약 검증 > 설계한 인덱스가 실제로 만들어져 있다 — 이름과 대상 열 구성까지 FAILED
+> Task :test FAILED
+5 tests completed, 1 failed
+BUILD FAILED in 37s
+
+### 변이3: ix_budget_periods_user_id_status 삭제
+budget_periods·status_thresholds 스키마 제약 검증 > 설계한 인덱스가 실제로 만들어져 있다 — 이름과 대상 열 구성까지 FAILED
+> Task :test FAILED
+9 tests completed, 1 failed
+BUILD FAILED in 37s
+
+### 변이4: ix_budget_periods_status_period_end 열 순서 (status, period_end) → (period_end, status) (이름 유지)
+budget_periods·status_thresholds 스키마 제약 검증 > 설계한 인덱스가 실제로 만들어져 있다 — 이름과 대상 열 구성까지 FAILED
+> Task :test FAILED
+9 tests completed, 1 failed
+BUILD FAILED in 37s
+
+### 변이5: ix_accounts_user_id 삭제
+accounts 스키마 제약 검증 > 설계한 인덱스가 실제로 만들어져 있다 — 이름과 대상 열 구성까지 FAILED
+> Task :test FAILED
+9 tests completed, 1 failed
+BUILD FAILED in 37s
+
+### 변이6: ix_accounts_consent_status_last_synced_at 에서 last_synced_at 열 제거 (이름 유지)
+accounts 스키마 제약 검증 > 설계한 인덱스가 실제로 만들어져 있다 — 이름과 대상 열 구성까지 FAILED
+> Task :test FAILED
+9 tests completed, 1 failed
+BUILD FAILED in 37s
+```
+
+6회 모두 `BUILD FAILED`이고, **매번 실패한 것은 새 인덱스 테스트 하나뿐**이다
+(`9 tests completed, 1 failed`). 이것이 두 가지를 동시에 보여준다.
+
+1. 새 단언이 실제로 변이를 잡는다 (전에는 같은 변이가 `BUILD SUCCESSFUL`이었다)
+2. 다른 테스트는 인덱스에 전혀 반응하지 않는다 — QA가 지적한 구멍이 그대로 재현된다.
+   인덱스 단언을 따로 두지 않으면 잡을 방법이 없다
+
+변이 2·4·6은 인덱스 **이름을 유지**한 채 열 구성만 바꿨다. 이름만 보는 단언이었다면
+전부 통과했을 것이다.
+
+### 반영 후 전체 빌드
+
+```
+$ ./gradlew build --rerun-tasks
+BUILD SUCCESSFUL in 45s
+7 actionable tasks: 7 executed
+```
+
+```
+TeloApplicationTests        tests="1" skipped="0" failures="0" errors="0"
+account.AccountSchemaTest   tests="9" skipped="0" failures="0" errors="0"   (8 → 9)
+budget.BudgetSchemaTest     tests="9" skipped="0" failures="0" errors="0"   (8 → 9)
+codef.EasyCodefUtilJdk25Test tests="1" skipped="0" failures="0" errors="0"
+common.time.AppZoneTest     tests="5" skipped="0" failures="0" errors="0"
+migration.PostgresMigrationTest tests="2" skipped="0" failures="0" errors="0"
+user.UserSchemaTest         tests="5" skipped="0" failures="0" errors="0"   (4 → 5)
+```
+
+세 스키마 테스트가 각각 1개씩 늘어 29 → 32건이 됐다. 마이그레이션 파일은 변이 후
+원복돼 `git status`에서 깨끗하다.
