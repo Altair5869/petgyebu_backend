@@ -419,20 +419,43 @@ class TransactionSchemaTest {
 	}
 
 	@Test
-	@DisplayName("거래를 지우면 이체 연결도 함께 지워진다 — ON DELETE CASCADE")
-	void deletingTransactionCascadesToTransferLink() {
-		Account account = givenAccount("link-cascade-1");
+	@DisplayName("출금 거래를 지우면 이체 연결도 함께 지워진다 — 출금 쪽 ON DELETE CASCADE")
+	void deletingWithdrawalTransactionCascadesToTransferLink() {
+		assertDeletingLinkedTransactionCascades("link-cascade-w", true);
+	}
+
+	@Test
+	@DisplayName("입금 거래를 지워도 이체 연결이 함께 지워진다 — 입금 쪽 ON DELETE CASCADE")
+	void deletingDepositTransactionCascadesToTransferLink() {
+		// 같은 제약이 두 컬럼에 걸려 있다. 출금만 지우면 입금 쪽 FK의 ON DELETE 규칙은 한 번도
+		// 실행되지 않아, 입금 쪽 CASCADE를 떼도 아무도 모른다. 그 스키마에서는 입금 거래 삭제가
+		// FK 위반으로 거부된다.
+		assertDeletingLinkedTransactionCascades("link-cascade-d", false);
+	}
+
+	/**
+	 * 연결된 거래 한쪽을 지우면 {@code transfer_links} 행이 따라 지워지는지 본다.
+	 *
+	 * @param deleteWithdrawal true면 출금 거래를, false면 입금 거래를 지운다. 어느 쪽 FK가
+	 *     깨졌는지 실패 메시지에서 구분되도록 단언 설명에 그대로 실어 보낸다
+	 */
+	private void assertDeletingLinkedTransactionCascades(String prefix, boolean deleteWithdrawal) {
+		Account account = givenAccount(prefix);
 		Transaction withdrawal = transactionRepository.saveAndFlush(
-				transaction(account, "codef-w-7", 10_000L));
+				transaction(account, prefix + "-w", 10_000L));
 		Transaction deposit = transactionRepository.saveAndFlush(
-				transaction(account, "codef-d-7", 10_000L));
+				transaction(account, prefix + "-d", 10_000L));
 		TransferLink saved = transferLinkRepository.saveAndFlush(link(withdrawal, deposit));
 
-		new JdbcTemplate(dataSource).update("DELETE FROM transactions WHERE id = ?",
-				withdrawal.getId());
+		Transaction target = deleteWithdrawal ? withdrawal : deposit;
+		String side = deleteWithdrawal ? "withdrawal_transaction_id" : "deposit_transaction_id";
+
+		// CASCADE가 없으면 이 DELETE 자체가 FK 위반으로 거부된다.
+		new JdbcTemplate(dataSource).update(
+				"DELETE FROM transactions WHERE id = ?", target.getId());
 
 		assertThat(count("SELECT count(*) FROM transfer_links WHERE id = ?", saved.getId()))
-				.as("transfer_links FK에 ON DELETE CASCADE가 없다. 거래 삭제가 FK 위반으로 막힌다")
+				.as("transfer_links.%s FK에 ON DELETE CASCADE가 없다. 그쪽 거래 삭제가 막힌다", side)
 				.isZero();
 	}
 

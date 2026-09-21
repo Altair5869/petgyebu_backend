@@ -533,3 +533,65 @@ Account 12 / Budget 13 / Category 11 / Sync 9 / Transaction 22 / User 9
 트러블슈팅 19번에 "같은 실수가 한 번 더" 절과 "이 세션에서 같은 모양의 실수가 네 번"
 표(유니크·인덱스·타입·CHECK)를 더했다. 항목 수는 늘지 않아 건수 집계는 그대로고, 요약 표
 제목만 새 내용을 포괄하도록 넓혔다.
+
+---
+
+## `transfer_links` 입금 쪽 CASCADE 대칭 테스트 (전수 점검 반영)
+
+리더의 전수 점검에서 나온 구멍이다. `deletingTransactionCascadesToTransferLink`가 **출금
+거래만** 지워서, 두 컬럼에 똑같이 걸린 `ON DELETE CASCADE` 중 입금 쪽 규칙은 한 번도
+실행되지 않았다. 입금 쪽 CASCADE를 떼도 전체 빌드가 초록이었다.
+
+### 고친 것 (테스트만, 마이그레이션 무변경)
+
+`src/test/java/com/petgyebu/telo/transaction/TransactionSchemaTest.java` (22 → 23건)
+
+기존 테스트 하나를 대칭 둘로 나눴다.
+
+- `deletingWithdrawalTransactionCascadesToTransferLink`
+- `deletingDepositTransactionCascadesToTransferLink`
+
+본체는 `assertDeletingLinkedTransactionCascades(prefix, deleteWithdrawal)` 헬퍼로 공유하고,
+어느 쪽 FK가 깨졌는지 단언 설명에 컬럼명을 실어 보낸다
+(`"transfer_links.%s FK에 ON DELETE CASCADE가 없다"`). CASCADE가 없으면 `DELETE` 자체가 FK
+위반으로 거부되므로 삭제 시도에서 바로 걸린다.
+
+### 양방향 증명 — 두 변이가 각각 제 짝만 깨뜨린다
+
+```
+=== (A) 입금 쪽 ON DELETE CASCADE만 제거 ===
+transactions·transfer_links … > 입금 거래를 지워도 이체 연결이 함께 지워진다 — 입금 쪽 ON DELETE CASCADE FAILED
+23 tests completed, 1 failed
+ERROR: update or delete on table "transactions" violates foreign key constraint
+       "transfer_links_deposit_transaction_id_fkey"
+
+=== (B) 출금 쪽 ON DELETE CASCADE만 제거 ===
+transactions·transfer_links … > 출금 거래를 지우면 이체 연결도 함께 지워진다 — 출금 쪽 ON DELETE CASCADE FAILED
+23 tests completed, 1 failed
+ERROR: update or delete on table "transactions" violates foreign key constraint
+       "transfer_links_withdrawal_transaction_id_fkey"
+```
+
+각 변이가 **1건씩만** 깨뜨린다. 분리가 됐다는 뜻이다. (A)는 대칭 테스트 추가 전에는
+`BUILD SUCCESSFUL`이었다.
+
+### 검증
+
+```
+$ git checkout HEAD -- src/main/resources/db/migration/   # 변이 원복, git status 깨끗
+$ ./gradlew build --rerun-tasks
+BUILD SUCCESSFUL in 21s
+```
+
+### 트러블슈팅 19번
+
+네 번 반복 표를 **다섯 번**으로 늘리고(FK CASCADE: 출금 쪽 채움 / 입금 쪽 비움), 다섯째가
+앞의 넷과 다른 점을 적었다 — 앞의 넷은 *다른 종류의 단언*이 빠진 것이고 이번은 **같은
+단언을 대칭 위치에 적용하지 않은 것**이다. 발견 경위(개별 구멍 추적이 아니라 마이그레이션
+구조를 종류별로 세어 단언과 대조한 전수 점검)도 함께 남겼다. 새 항목은 만들지 않았고 건수
+집계는 그대로다.
+
+### 리더가 백로그로 넘긴 것 (이번에 손대지 않음)
+
+`GENERATED ALWAYS` 8개·`PRIMARY KEY` 10개·`DEFAULT` 18개 미단언. 각각 자가 검출되거나
+사용자가 범위를 정한 사안이라 리더가 근거와 함께 백로그에 기록한다.
