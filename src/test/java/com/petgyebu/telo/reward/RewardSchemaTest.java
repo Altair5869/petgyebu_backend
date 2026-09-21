@@ -10,7 +10,9 @@ import com.petgyebu.telo.budget.repository.BudgetPeriodRepository;
 import com.petgyebu.telo.common.time.AppZone;
 import com.petgyebu.telo.reward.domain.CreditBalance;
 import com.petgyebu.telo.reward.domain.RewardConditionType;
+import com.petgyebu.telo.reward.domain.RewardGrant;
 import com.petgyebu.telo.reward.repository.CreditBalanceRepository;
+import com.petgyebu.telo.reward.repository.RewardGrantRepository;
 import com.petgyebu.telo.user.domain.AuthProvider;
 import com.petgyebu.telo.user.domain.User;
 import com.petgyebu.telo.user.repository.UserRepository;
@@ -61,6 +63,9 @@ class RewardSchemaTest {
 
 	@Autowired
 	private CreditBalanceRepository creditBalanceRepository;
+
+	@Autowired
+	private RewardGrantRepository rewardGrantRepository;
 
 	@Autowired
 	private DataSource dataSource;
@@ -207,6 +212,68 @@ class RewardSchemaTest {
 				Long.class, period.getId()))
 				.as("두 조건을 모두 충족한 달의 합산 크레딧이 300이 아니다")
 				.isEqualTo(300L);
+	}
+
+	@Test
+	@DisplayName("RewardGrant 엔티티로 저장한 값이 그대로 내려간다 — 판정 근거 두 컬럼까지")
+	void rewardGrantEntityPersistsJudgementBasis() {
+		// 나머지 reward_grants 단언은 전부 JDBC raw INSERT 경로다. 엔티티를 지나가는 경로가
+		// 하나도 없으면 생성자 인자 순서가 뒤바뀌어도, @Enumerated(STRING)이 풀려 서수가
+		// 저장돼도 아무도 모른다. ddl-auto: validate는 컬럼의 존재와 타입만 보기 때문이다.
+		// 이 값들은 T-043의 "왜 보상을 못 받았는지" 조회가 그대로 읽는다.
+		BudgetPeriod period = givenBudgetPeriod("grant-entity-1");
+
+		RewardGrant saved = rewardGrantRepository.saveAndFlush(new RewardGrant(
+				period.getUser(),
+				period,
+				RewardConditionType.SAVED_10_PERCENT,
+				200L,
+				360_000L,
+				400_000L,
+				OffsetDateTime.now(AppZone.clock())));
+
+		Map<String, Object> row = new JdbcTemplate(dataSource).queryForMap(
+				"SELECT condition_type, credit_amount, period_expense_total, "
+						+ "previous_period_expense_total FROM reward_grants WHERE id = ?",
+				saved.getId());
+
+		// 서수로 저장되면 '1'이 들어가고 CHECK 제약에 걸려 죽는다. 문자열인지 값으로 못 박는다.
+		assertThat(row.get("condition_type"))
+				.as("condition_type이 문자열로 저장되지 않았다. @Enumerated(STRING)이 빠졌다")
+				.isEqualTo("SAVED_10_PERCENT");
+		assertThat(row.get("credit_amount")).isEqualTo(200L);
+
+		// 판정 근거 두 값은 크기가 다를 뿐 타입이 같아 뒤바뀌어도 예외가 나지 않는다.
+		// 뒤바뀌면 "직전보다 덜 썼다"는 근거가 통째로 거꾸로 표시된다.
+		assertThat(row.get("period_expense_total"))
+				.as("해당 기간 지출 합계가 넘긴 값과 다르다. 생성자 인자 순서가 뒤바뀌었다")
+				.isEqualTo(360_000L);
+		assertThat(row.get("previous_period_expense_total"))
+				.as("직전 기간 지출 합계가 넘긴 값과 다르다. 생성자 인자 순서가 뒤바뀌었다")
+				.isEqualTo(400_000L);
+	}
+
+	@Test
+	@DisplayName("첫 기간은 직전 기간 지출이 NULL로 내려간다 — 엔티티 경로")
+	void firstPeriodGrantKeepsPreviousTotalNull() {
+		// 첫 기간은 비교 대상이 없다. 엔티티가 null을 0으로 바꿔 넣으면 "직전 기간에 0원을
+		// 썼다"가 되어 절약 판정 근거가 뒤집힌다.
+		BudgetPeriod period = givenBudgetPeriod("grant-entity-null-1");
+
+		RewardGrant saved = rewardGrantRepository.saveAndFlush(new RewardGrant(
+				period.getUser(),
+				period,
+				RewardConditionType.WITHIN_TARGET,
+				100L,
+				360_000L,
+				null,
+				OffsetDateTime.now(AppZone.clock())));
+
+		assertThat(new JdbcTemplate(dataSource).queryForObject(
+				"SELECT previous_period_expense_total FROM reward_grants WHERE id = ?",
+				Long.class, saved.getId()))
+				.as("첫 기간인데 직전 기간 지출이 NULL이 아니다")
+				.isNull();
 	}
 
 	@Test

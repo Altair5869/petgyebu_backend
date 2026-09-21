@@ -387,6 +387,12 @@ class ShopSchemaTest {
 		assertThat(new JdbcTemplate(dataSource).queryForObject(
 				"SELECT item_type FROM user_items WHERE id = ?", String.class, saved.getId()))
 				.isEqualTo("HOUSE");
+		// 배치 관련 단언이 전부 JDBC 헬퍼(insertUserItem) 경로라 엔티티 생성자가 정하는 초기
+		// 배치 상태는 아무도 보지 않았다. 이 줄이 뒤집히면 구매 즉시 방에 배치되고, 같은 슬롯
+		// 두 번째 아이템은 구매 자체가 부분 유니크에 막힌다(F-HPWCNJ, 요구사항 427-428행).
+		assertThat(saved.isPlaced())
+				.as("구매 직후 아이템이 방에 배치돼 있다. 획득 직후는 보관함이어야 한다")
+				.isFalse();
 	}
 
 	// ---------------------------------------------------------------- 구조

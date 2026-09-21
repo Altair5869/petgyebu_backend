@@ -43,7 +43,7 @@ import lombok.NoArgsConstructor;
  * <p>{@code shop_item_id}의 FK에는 {@code ON DELETE} 절이 없다(기본값 NO ACTION). 상점 아이템은
  * {@code isActive = false}로 판매만 중단하고 삭제하지 않는다.
  *
- * <p>구매·배치·해제 API는 T-044 범위라 여기에 아직 없다.
+ * <p>구매는 T-044, 배치·해제는 T-045 범위라 여기에 아직 없다.
  */
 @Entity
 @Table(name = "user_items")

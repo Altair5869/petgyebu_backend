@@ -266,11 +266,58 @@ $ scripts/check-migration-order.sh
 3. **Spring Batch 메타 테이블은 이 마이그레이션에 없다.** `docs/09-db-design.md` 6장이
    Sprint 6 묶음에 함께 넣었지만 T-041 범위 밖이라 만들지 않았다.
 4. **`user_items` 배치/해제 API가 없다.** 슬롯당 1개 규칙은 지금 DB 제약만 보장한다.
-   애플리케이션 경로는 T-044에서 만든다.
+   구매는 T-044, 배치·해제는 T-045에서 만든다.
+
+## QA 반영 (PASS 14 / FIX 3 / REDO 0)
+
+QA가 **엔티티를** 변이시켜 미검출 둘을 찾았다. 셋 다 반영했다.
+
+- [완료] FIX 1 — `UserItem` 생성자의 초기 배치 상태: `src/test/java/com/petgyebu/telo/shop/ShopSchemaTest.java` — `userItemCopiesItemTypeFromShopItem`에 `saved.isPlaced()` 단언 한 줄 추가. 새 테스트는 만들지 않았다
+- [완료] FIX 2 — `RewardGrant` 엔티티 경로 부재: `src/test/java/com/petgyebu/telo/reward/RewardSchemaTest.java` — `RewardGrantRepository`를 주입하고 엔티티 경로 테스트 둘 추가(`rewardGrantEntityPersistsJudgementBasis`, `firstPeriodGrantKeepsPreviousTotalNull`). 리포지토리 사용처가 0이던 것도 함께 해소됐다
+- [완료] FIX 3 — Task 번호 오기: `src/main/java/com/petgyebu/telo/shop/domain/UserItem.java` 주석과 이 문서의 미해결 사항 4번을 "구매는 T-044, 배치·해제는 T-045"로 고쳤다
+
+마이그레이션과 엔티티 로직은 건드리지 않았다(주석 제외).
+
+**양방향 증명** — QA가 미검출로 보고한 두 변이를 수정 후 다시 돌렸다.
+
+```
+--- BEFORE (QA 보고) ---
+E1 UserItem.isPlaced = false → true      : tests=19 failures=0
+E2 RewardGrant 판정 근거 두 값 뒤바꾸기   : tests=14 failures=0
+
+--- AFTER ---
+=== MUTATION E1 => gradle exit 1
+tests=19 failures=1 errors=0
+  FAILED: UserItem은 shop_items의 item_type을 그대로 복사한다
+          [구매 직후 아이템이 방에 배치돼 있다. 획득 직후는 보관함이어야 한다]
+          Expecting value to be false but was true
+
+=== MUTATION E2 => gradle exit 1
+tests=16 failures=2 errors=0
+  FAILED: RewardGrant 엔티티로 저장한 값이 그대로 내려간다 — 판정 근거 두 컬럼까지
+          [해당 기간 지출 합계가 넘긴 값과 다르다. 생성자 인자 순서가 뒤바뀌었다]
+          expected: 360000L but was: 400000L
+  FAILED: 첫 기간은 직전 기간 지출이 NULL로 내려간다 — 엔티티 경로
+          [첫 기간인데 직전 기간 지출이 NULL이 아니다]
+          expected: null but was: 360000L
+```
+
+```
+$ ./gradlew build --rerun-tasks
+BUILD SUCCESSFUL in 25s
+TOTAL 121 tests, 0 failures, 0 errors
+```
 
 ## 트러블슈팅 기록
 
-**추가한 항목이 없다.** 이번 작업에서 관측된 실패가 없었다. 처음 실행한
+**최초 구현 시점에는 추가한 항목이 없었다.** QA 반영에서 20번을 추가했다
+(`docs/11-troubleshooting-log.md` — "축이 DB 제약만 본다"). 17·18·19번과 같은 조용한 실패
+계열이되 축의 종류가 다르다. 앞의 셋은 DB 제약을 보는 축의 문제였고 이번은 **엔티티 경로가
+통째로 비어 있던 것**이다.
+
+아래는 최초 구현 시점의 판단이며 그대로 둔다.
+
+**최초 구현에서 추가한 항목이 없었던 이유.** 이번 작업에서 관측된 실패가 없었다. 처음 실행한
 `./gradlew test`부터 통과했고 변이 8종도 예상대로 FAILED가 났다.
 
 작업 중 실행 전에 스스로 고친 것이 둘 있었으나 `CLAUDE.md`의 기록 기준에 맞지 않아 남기지
