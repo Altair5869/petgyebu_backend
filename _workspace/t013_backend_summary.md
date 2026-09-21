@@ -138,3 +138,22 @@ $ ./scripts/check-migration-order.sh
 - **키워드 룰 시드 없음** (위 참고). T-019에서 룰 목록을 확정하고 별도 마이그레이션으로 넣는다.
 - **`merchant_keyword_rules.category_id`에 인덱스를 두지 않았다.** 설계 문서에 없고, 룰 건수가 작아 전수 스캔으로 충분하다. 매칭 로직을 만드는 T-019에서 실제 접근 패턴을 보고 판단한다.
 - **트러블슈팅 기록 없음.** 이번 작업에서 한 단계 이상 추론이 필요했던 문제가 없었다. 첫 빌드부터 통과했고, 관례와 달라야 하는 세 지점은 전부 사전에 문서화된 제약이었다.
+
+---
+
+## 후속: `NOT NULL` 단언 추가 (사용자 확인 후)
+
+QA가 미검출로 남긴 것 중 `keywords JSONB NOT NULL`의 `NOT NULL`을 지워도 9건 전부 통과하는 문제를 네 스키마 테스트 전부에 반영했다. `DEFAULT`는 범위 밖이라 손대지 않았다.
+
+- `src/test/java/com/petgyebu/telo/user/UserSchemaTest.java` (`users`, `user_consents`)
+- `src/test/java/com/petgyebu/telo/budget/BudgetSchemaTest.java` (`budget_periods`, `status_thresholds`)
+- `src/test/java/com/petgyebu/telo/account/AccountSchemaTest.java` (`accounts`)
+- `src/test/java/com/petgyebu/telo/category/CategorySchemaTest.java` (`categories`, `merchant_keyword_rules`)
+
+네 파일에 같은 모양의 `assertNullability(String, Map<String, String>)` 헬퍼를 뒀다. 공유 유틸리티 클래스는 만들지 않았다(`assertIndex`와 같은 방식). 테이블 전체의 `column_name → is_nullable` 맵을 한 번에 읽어 `containsExactlyInAnyOrderEntriesOf`로 통째로 비교하므로, `NOT NULL`이 사라지는 것뿐 아니라 null 허용 열에 `NOT NULL`이 붙는 것, 열이 늘거나 없어지는 것도 걸린다. 기대값은 네 마이그레이션 SQL을 읽어 채웠다.
+
+전체 41 → 45건. `./gradlew build --rerun-tasks` `BUILD SUCCESSFUL in 16s`.
+
+양방향 증명 10회(테이블 7개에 (a) `NOT NULL` 제거, null 허용 열이 있는 테이블 3개에 (b) `NOT NULL` 추가)는 전부 FAILED를 냈다. 실제 출력은 `docs/11-troubleshooting-log.md` 18번에 있다.
+
+트러블슈팅 18번을 추가했다. 17번(인덱스)과 같은 "조용한 실패" 계열이되 결과가 느려지는 것이 아니라 틀린 데이터가 들어온다는 점이 다르다. 그 과정에서 17번 본문의 `ddl-auto: validate` 검사 범위 서술이 틀린 것(nullable을 본다고 적혀 있다)을 발견해 정정 주석을 달았다.

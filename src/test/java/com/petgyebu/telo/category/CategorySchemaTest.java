@@ -1,5 +1,6 @@
 package com.petgyebu.telo.category;
 
+import static java.util.Map.entry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
@@ -10,6 +11,7 @@ import com.petgyebu.telo.category.repository.CategoryRepository;
 import com.petgyebu.telo.category.repository.MerchantKeywordRuleRepository;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -223,6 +225,53 @@ class CategorySchemaTest {
 		assertThat(seeded)
 				.as("시드 카테고리를 참조하는 키워드 룰이 들어와 있다")
 				.isZero();
+	}
+
+	@Test
+	@DisplayName("NOT NULL 구성이 설계와 정확히 일치한다 — 빠진 것도 더 붙은 것도 없다")
+	void nullabilityMatchesDesign() {
+		assertNullability("categories", Map.ofEntries(
+				entry("id", "NO"),
+				entry("code", "NO"),
+				entry("name", "NO"),
+				entry("sort_order", "NO")));
+
+		assertNullability("merchant_keyword_rules", Map.ofEntries(
+				entry("id", "NO"),
+				entry("category_id", "NO"),
+				entry("keywords", "NO"),
+				entry("priority", "NO")));
+	}
+
+	/**
+	 * 테이블의 NOT NULL 구성이 설계와 정확히 일치하는지 본다.
+	 *
+	 * <p>{@code NOT NULL}은 인덱스와 달리 틀린 답을 낸다. 그런데 마이그레이션에서 지워도
+	 * 아무것도 깨지지 않는다. Hibernate의 {@code ddl-auto: validate}는 nullability를 보지
+	 * 않고, 엔티티의 {@code @Column(nullable = false)}는 DDL 생성용이라 Flyway가 테이블을
+	 * 만드는 이 구성에서는 아무 일도 하지 않는다. 제약 테스트도 늘 제대로 된 값을 넣으므로
+	 * 빈 값을 막는 규칙이 있든 없든 결과가 같다. 빌드는 초록인데 null이 들어온다.
+	 *
+	 * <p>컬럼을 하나씩 보지 않고 테이블 전체의 {@code column_name → is_nullable} 맵을
+	 * 통째로 비교한다. 그래야 양방향으로 잡힌다. {@code NOT NULL}이 사라지는 것뿐 아니라
+	 * 원래 null을 허용하던 컬럼에 {@code NOT NULL}이 붙는 것, 컬럼이 늘거나 없어지는 것도
+	 * 함께 걸린다.
+	 *
+	 * @param expected 컬럼명 → {@code "NO"}(NOT NULL) 또는 {@code "YES"}(null 허용)
+	 */
+	private void assertNullability(String tableName, Map<String, String> expected) {
+		List<Map<String, Object>> columns = new JdbcTemplate(dataSource).queryForList(
+				"SELECT column_name, is_nullable FROM information_schema.columns "
+						+ "WHERE table_schema = 'public' AND table_name = ?",
+				tableName);
+
+		Map<String, String> actual = columns.stream().collect(Collectors.toMap(
+				column -> (String) column.get("column_name"),
+				column -> (String) column.get("is_nullable")));
+
+		assertThat(actual)
+				.as("%s 테이블의 NOT NULL 구성이 설계와 다르다", tableName)
+				.containsExactlyInAnyOrderEntriesOf(expected);
 	}
 
 	/**
