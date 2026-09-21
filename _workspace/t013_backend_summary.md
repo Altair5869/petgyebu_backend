@@ -11,7 +11,7 @@
 - [완료] 리포지토리: `src/main/java/com/petgyebu/telo/category/repository/CategoryRepository.java`, `.../repository/MerchantKeywordRuleRepository.java`
 - [완료] 스키마 테스트: `src/test/java/com/petgyebu/telo/category/CategorySchemaTest.java` (9건)
 - [보류] 키워드 룰 시드 — 확정된 키워드 목록이 문서에 없다. 아래 참고
-- [범위 밖] 가맹점명 자동 분류 로직 — T-016
+- [범위 밖] 가맹점명 자동 분류 로직 — T-019
 
 ## 만든 파일
 
@@ -38,7 +38,7 @@
 
 실제 키워드 룰 내용이 어느 문서에도 없다. `docs/09-db-design.md` 3.3절은 "시드 데이터로 관리"까지, `docs/06-sprint-plan.md:100`도 "룰도 시드 데이터로 관리"까지다. 카테고리 10건과 달리 확정된 목록이 없어 **키워드를 지어내지 않았다.** 테이블과 GIN 인덱스만 만들고 행은 비워 뒀다.
 
-백로그 완료 기준도 "카테고리 10개가 시드로 들어간다. `keywords`에 GIN 인덱스가 생성된다"까지만 요구한다. 실제 룰은 자동 분류를 구현하는 **T-016**에서 정하고 별도 마이그레이션으로 넣는다. 지어낸 시드가 들어오면 깨지도록 `noKeywordRulesAreSeeded` 단언을 뒀다.
+백로그 완료 기준도 "카테고리 10개가 시드로 들어간다. `keywords`에 GIN 인덱스가 생성된다"까지만 요구한다. 실제 룰은 자동 분류를 구현하는 **T-019**에서 정하고 별도 마이그레이션으로 넣는다. 지어낸 시드가 들어오면 깨지도록 `noKeywordRulesAreSeeded` 단언을 뒀다.
 
 ## 검증
 
@@ -85,7 +85,7 @@ categories·merchant_keyword_rules 스키마 제약 검증 > 같은 code를 가�
 9 tests completed, 1 failed
 BUILD FAILED in 7s
 
-### 변이4: categories.id를 GENERATED ALWAYS AS IDENTITY로
+### 변이4: categories.id를 GENERATED ALWAYS AS IDENTITY로 (시드 INSERT에 OVERRIDING SYSTEM VALUE 동반)
 categories·merchant_keyword_rules 스키마 제약 검증 > categories.id는 identity가 아니다 — 값을 주지 않으면 INSERT가 실패한다 FAILED
 categories·merchant_keyword_rules 스키마 제약 검증 > 룰이 참조 중인 카테고리는 지울 수 없다 — FK는 CASCADE가 아니라 NO ACTION이다 FAILED
 categories·merchant_keyword_rules 스키마 제약 검증 > code가 다르면 카테고리를 얼마든지 추가할 수 있다 FAILED
@@ -99,9 +99,26 @@ BUILD FAILED in 7s
 categories·merchant_keyword_rules 스키마 제약 검증 > 룰이 참조 중인 카테고리는 지울 수 없다 — FK는 CASCADE가 아니라 NO ACTION이다 FAILED
 9 tests completed, 1 failed
 BUILD FAILED in 7s
+
+### 변이6: categories.id를 SMALLINT -> INTEGER (QA 지적 반영 후 추가)
+categories·merchant_keyword_rules 스키마 제약 검증 > categories.id는 identity가 아니다 — 값을 주지 않으면 INSERT가 실패한다 FAILED
+> Task :test FAILED
+9 tests completed, 1 failed
+BUILD FAILED in 7s
 ```
 
-변이4는 의도한 테스트 외에 4건이 더 깨진다. `GENERATED ALWAYS`가 되면 테스트가 쓰는 명시적 ID INSERT 자체가 거부되기 때문이다. 의도한 `categories.id는 identity가 아니다`도 함께 FAILED이므로 증명은 성립한다.
+**변이4는 컬럼 정의만 바꿔서는 재현되지 않는다.** `id`를 `GENERATED ALWAYS AS IDENTITY`로 바꾸면 같은 마이그레이션 안의 시드 INSERT가 `id`에 명시적 값을 넣으므로 PostgreSQL이 그 INSERT를 거부하고 Flyway가 죽는다. 그러면 컨텍스트 로딩 단계에서 **9건이 전부 실패**해, 정작 보려던 `categoryIdIsNotGenerated` 단언이 실제로 동작하는지를 볼 수 없다. 그래서 변이4는 두 곳을 함께 바꿔야 한다.
+
+```sql
+-- 1) 컬럼 정의
+id SMALLINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+-- 2) 시드 INSERT (이게 없으면 Flyway가 죽어 9건 전부 실패한다)
+INSERT INTO categories (id, code, name, sort_order) OVERRIDING SYSTEM VALUE VALUES
+```
+
+위 출력은 둘을 함께 적용한 결과다. 의도한 테스트 외에 4건이 더 깨지는 것은 `GENERATED ALWAYS`가 테스트 쪽의 명시적 ID INSERT도 거부하기 때문이다. 의도한 `categories.id는 identity가 아니다`가 FAILED이므로 증명은 성립한다.
+
+변이6은 QA 지적(FIX 2)으로 추가한 것이다. 지적 전에는 `id SMALLINT` → `INTEGER`로 바꿔도 9건 전부 통과했다. Hibernate `validate`가 `Short`↔`integer`를 문제 삼지 않고, PostgreSQL은 FK를 `smallint = integer`로 허용하며, 시드 단언은 `CAST(id AS integer)`로 읽어 타입을 보지 못하기 때문이다. `categoryIdIsNotGenerated`에 `udt_name = 'int2'` 단언을 더해 이 축을 막았다.
 
 전 변이 원복 후 파일 diff 차이 없음을 확인했고, `./gradlew build --rerun-tasks`를 다시 돌려 `BUILD SUCCESSFUL`을 확인했다.
 
@@ -118,6 +135,6 @@ $ ./scripts/check-migration-order.sh
 
 ## 남긴 미해결 사항
 
-- **키워드 룰 시드 없음** (위 참고). T-016에서 룰 목록을 확정하고 별도 마이그레이션으로 넣는다.
-- **`merchant_keyword_rules.category_id`에 인덱스를 두지 않았다.** 설계 문서에 없고, 룰 건수가 작아 전수 스캔으로 충분하다. 매칭 로직을 만드는 T-016에서 실제 접근 패턴을 보고 판단한다.
+- **키워드 룰 시드 없음** (위 참고). T-019에서 룰 목록을 확정하고 별도 마이그레이션으로 넣는다.
+- **`merchant_keyword_rules.category_id`에 인덱스를 두지 않았다.** 설계 문서에 없고, 룰 건수가 작아 전수 스캔으로 충분하다. 매칭 로직을 만드는 T-019에서 실제 접근 패턴을 보고 판단한다.
 - **트러블슈팅 기록 없음.** 이번 작업에서 한 단계 이상 추론이 필요했던 문제가 없었다. 첫 빌드부터 통과했고, 관례와 달라야 하는 세 지점은 전부 사전에 문서화된 제약이었다.

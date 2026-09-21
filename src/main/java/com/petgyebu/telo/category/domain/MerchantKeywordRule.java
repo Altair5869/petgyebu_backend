@@ -20,14 +20,14 @@ import org.hibernate.type.SqlTypes;
 /**
  * 가맹점명 키워드로 카테고리를 정하는 룰 한 건(F-OAVYWT).
  *
- * <p>{@code keywords}는 JSONB 배열이며 GIN 인덱스가 걸려 있다. 매칭 로직은 T-016 범위라
+ * <p>{@code keywords}는 JSONB 배열이며 GIN 인덱스가 걸려 있다. 매칭 로직은 T-019 범위라
  * 여기에 아직 없다.
  *
  * <p>카테고리 FK에 {@code ON DELETE CASCADE}가 <b>없다.</b> 카테고리는 사용자 소유 데이터가
  * 아니라 고정 시드라, 참조 중인 카테고리 삭제는 거부되는 것이 옳다.
  *
  * <p>룰 자체는 시드 데이터로 관리하며 관리자 화면을 만들지 않는다(Q12). 현재 시드 행은 없다.
- * 실제 키워드 목록이 확정되지 않아 T-016에서 정한다.
+ * 실제 키워드 목록이 확정되지 않아 T-019에서 정한다.
  */
 @Entity
 @Table(name = "merchant_keyword_rules")

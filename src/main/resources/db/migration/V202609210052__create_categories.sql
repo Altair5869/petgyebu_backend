@@ -43,4 +43,4 @@ CREATE INDEX ix_merchant_keyword_rules_keywords ON merchant_keyword_rules USING 
 
 -- 룰 시드는 넣지 않는다. 실제 키워드 목록이 어느 문서에도 확정돼 있지 않다
 -- (docs/09-db-design.md 3.3절은 "시드 데이터로 관리"까지만 적었다).
--- 자동 분류를 구현하는 T-016에서 룰을 정하고 별도 마이그레이션으로 넣는다.
+-- 자동 분류를 구현하는 T-019에서 룰을 정하고 별도 마이그레이션으로 넣는다.

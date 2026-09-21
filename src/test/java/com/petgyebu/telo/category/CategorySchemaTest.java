@@ -112,14 +112,19 @@ class CategorySchemaTest {
 				.rootCause()
 				.hasMessageContaining("id");
 
-		// 컬럼 정의 자체도 못 박는다. identity 컬럼이면 'YES'가 돌아온다.
-		String isIdentity = jdbc.queryForObject(
-				"SELECT is_identity FROM information_schema.columns "
-						+ "WHERE table_name = 'categories' AND column_name = 'id'",
-				String.class);
-		assertThat(isIdentity)
+		// 컬럼 정의 자체도 못 박는다. identity 컬럼이면 is_identity가 'YES'가 돌아온다.
+		// 타입도 함께 본다. SMALLINT를 INTEGER로 바꿔도 Hibernate validate는 Short↔integer를
+		// 문제 삼지 않고, PostgreSQL은 FK를 smallint = integer로 허용하며, 시드 단언은
+		// CAST(id AS integer)로 읽어 타입을 보지 못한다. 이 단언이 없으면 아무도 못 잡는다.
+		Map<String, Object> idColumn = jdbc.queryForMap(
+				"SELECT is_identity, udt_name FROM information_schema.columns "
+						+ "WHERE table_name = 'categories' AND column_name = 'id'");
+		assertThat(idColumn.get("is_identity"))
 				.as("categories.id가 identity 컬럼이다. 시드 ID가 환경마다 달라진다")
 				.isEqualTo("NO");
+		assertThat(idColumn.get("udt_name"))
+				.as("categories.id가 SMALLINT가 아니다(docs/09-db-design.md 3.2절)")
+				.isEqualTo("int2");
 	}
 
 	@Test
@@ -155,7 +160,7 @@ class CategorySchemaTest {
 	@DisplayName("keywords에 GIN 인덱스가 있다 — 이름·대상 열·인덱스 종류까지")
 	void keywordsHasGinIndex() {
 		// 종류를 보지 않으면 B-tree로 바뀌어도 통과한다. 이름과 열은 그대로이기 때문이다.
-		// B-tree로는 JSONB 포함 연산(@>)을 태울 수 없어 T-016 자동 분류가 전수 스캔이 된다.
+		// B-tree로는 JSONB 포함 연산(@>)을 태울 수 없어 T-019 자동 분류가 전수 스캔이 된다.
 		assertIndex("merchant_keyword_rules", "ix_merchant_keyword_rules_keywords",
 				"gin", "keywords");
 	}
@@ -208,7 +213,7 @@ class CategorySchemaTest {
 	}
 
 	@Test
-	@DisplayName("키워드 룰 시드는 넣지 않았다 — 실제 룰은 T-016에서 정한다")
+	@DisplayName("키워드 룰 시드는 넣지 않았다 — 실제 룰은 T-019에서 정한다")
 	void noKeywordRulesAreSeeded() {
 		// 문서 어디에도 확정된 키워드 목록이 없다. 지어낸 키워드가 들어오면 여기서 깨진다.
 		Integer seeded = new JdbcTemplate(dataSource).queryForObject(
