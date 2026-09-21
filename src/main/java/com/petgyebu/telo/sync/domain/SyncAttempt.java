@@ -30,7 +30,7 @@ import lombok.NoArgsConstructor;
  * 왜곡되기 때문이다. 계좌가 사라져도 어느 은행이었는지 알 수 있게 {@code bankCode}를 따로 들고
  * 있는다.
  *
- * <p>동기화 스케줄러와 재시도는 T-015 범위라 여기에 아직 없다.
+ * <p>동기화 스케줄러와 재시도는 T-020 범위라 여기에 아직 없다.
  */
 @Entity
 @Table(name = "sync_attempts")

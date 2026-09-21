@@ -217,3 +217,105 @@ append-only가 조용히 무너졌을 것이다.
 - `transactions.user_id`↔`account_id` 복합 FK는 "하지 않기로 판단"이지 "못 함"이 아니다. 나중에
   걸기로 한다면 `accounts` 스키마 변경을 포함한 별도 Task로 올려야 한다.
 - 푸시·PR은 하지 않았다(리더 지시 대기).
+
+---
+
+## QA FIX 반영 (PASS 13 / FIX 3 / REDO 0 → 후속 커밋)
+
+스키마·엔티티 자체에는 변경이 없다. 마이그레이션 파일은 한 글자도 고치지 않았다. 고친 것은
+테스트 커버리지 둘과 주석 둘이다.
+
+### FIX 1 — CHECK에 허용 케이스를 더했다
+
+거부 케이스만 보면 CHECK 목록에서 값을 하나 빼도 통과한다(T-023에서 UNIQUE에 대해 얻은 교훈을
+CHECK에 옮기지 못한 자리였다). 다음을 추가했다.
+
+- `TransactionSchemaTest.definedEnumValuesAreAccepted` — `txn_type` 2종, `initial_classification_source`
+  2종, `transfer_status` 5종, `refund_status` 3종을 raw INSERT로 넣고 **되읽어** 값까지 확인한다
+- `TransactionSchemaTest.userConfirmedLinkStatusIsAllowed` — `link_status = 'USER_CONFIRMED'`와
+  `confirmed_at` 저장 확인
+- `SyncAttemptSchemaTest.definedEnumValuesAreAccepted` — `('MANUAL','FAILURE')`·`('SCHEDULED','SUCCESS')`
+
+거부 헬퍼와 허용 헬퍼가 같은 INSERT를 쓰도록 `rawInsert`를 뽑아 공유한다.
+
+### FIX 2 — `udt_name`에 `character_maximum_length`를 더했다
+
+`VARCHAR(10)`과 `VARCHAR(255)`는 `udt_name`이 똑같이 `varchar`라 길이 변이를 못 잡았다.
+`assertColumnType`에 길이 인자를 추가했다(문자열이 아닌 타입은 `null`을 기대한다 — 이러면
+숫자 컬럼이 문자열로 바뀌는 변이도 함께 걸린다). 적용: `codef_transaction_id`(255)·`txn_type`(10)·
+`transfer_status`(20)·`memo`(255), `transfer_links.link_status`(20)·`match_reason`(255),
+`sync_attempts.bank_code`(10)·`result`(10)·`failure_reason`(500).
+
+### FIX 3 — `category_id`의 FK를 단언한다
+
+`TransactionSchemaTest.categoryForeignKeyIsEnforced` — 없는 카테고리(1234)로 raw INSERT를 던져
+`transactions_category_id_fkey` 위반을 확인한다.
+
+### FIX 4 — 후속 Task 번호 오기 둘
+
+- `TransferLink.java:29` T-018 → **T-029**(이체 확인·연결 해제 API)
+- `SyncAttempt.java:33` T-015 → **T-020**(스케줄러·분산락·재시도)
+
+나머지 Task 참조는 QA가 맞다고 확인해 건드리지 않았다.
+
+### 양방향 증명 — QA가 "미검출"로 보고한 여섯을 하나씩 다시 돌렸다
+
+전부 원복했고 최종 파일은 변이 전과 `diff` 무출력이다.
+
+| # | 변이 | 이전 | 지금 |
+|---|---|---|---|
+| Q1 | `ck_transactions_txn_type`에서 `'INCOME'` 제거 | 미검출 | **1건 FAILED** |
+| Q2 | `ck_transactions_transfer_status`에서 `'UNLINKED'` 제거 | 미검출 | **1건 FAILED** |
+| Q3 | `ck_transactions_refund_status`에서 `'ORIGINAL'` 제거 | 미검출 | **1건 FAILED** |
+| Q4 | `codef_transaction_id` `VARCHAR(255)` → `VARCHAR(30)` | 미검출 | **1건 FAILED** |
+| Q5 | `sync_attempts.bank_code` `VARCHAR(10)` → `VARCHAR(100)` | 미검출 | **1건 FAILED** |
+| Q6 | `category_id`의 `REFERENCES categories (id)` 제거 | 미검출 | **1건 FAILED** |
+
+```
+=== Q1 INCOME 제거 ===
+> 명세에 있는 열거형 값은 전부 저장된다 — CHECK가 과도하게 좁지 않다 FAILED
+22 tests completed, 1 failed
+DataIntegrityViolationException ... INSERT INTO transactions (... txn_type ...)
+
+=== Q2 UNLINKED 제거 / Q3 ORIGINAL 제거 ===
+> 명세에 있는 열거형 값은 전부 저장된다 — CHECK가 과도하게 좁지 않다 FAILED
+22 tests completed, 1 failed
+
+=== Q4 codef_transaction_id VARCHAR(30) ===
+> 컬럼 타입이 설계와 일치한다 — udt_name과 VARCHAR 길이까지 FAILED
+AssertionFailedError: [transactions.codef_transaction_id의 길이가 설계와 다르다]
+expected: 255
+ but was: 30
+
+=== Q5 bank_code VARCHAR(100) ===
+> 컬럼 타입이 설계와 일치한다 — udt_name과 VARCHAR 길이까지 FAILED
+AssertionFailedError: [sync_attempts.bank_code의 길이가 설계와 다르다]
+expected: 10
+ but was: 100
+
+=== Q6 category_id FK 제거 ===
+> category_id는 categories를 참조한다 — 없는 카테고리는 저장할 수 없다 FAILED
+AssertionError: Expecting code to raise a throwable.
+```
+
+덤으로 `'AUTO_MATCHED'`·`'MANUAL'`·`link_status 'USER_CONFIRMED'`를 동시에 빼는 변이도 돌렸다.
+
+```
+> 사용자가 확인한 연결도 저장된다 — link_status CHECK가 'AUTO'만 남지 않았다 FAILED
+> 명세에 있는 열거형 값은 전부 저장된다 — CHECK가 과도하게 좁지 않다 FAILED
+> 명세에 있는 trigger_type·result 값은 전부 저장된다 — CHECK가 과도하게 좁지 않다 FAILED
+> 계좌 없이도 기록을 남길 수 있다 — account_id는 NULL 허용이다 FAILED
+31 tests completed, 4 failed
+```
+
+### FIX 반영 후 검증
+
+```
+$ ./gradlew build --rerun-tasks
+BUILD SUCCESSFUL in 24s
+TransactionSchemaTest  tests="22" failures="0" errors="0"
+SyncAttemptSchemaTest  tests="9"  failures="0" errors="0"
+```
+
+기존 네 스키마 테스트는 건드리지 않았다. 두 새 축(CHECK 허용 케이스, VARCHAR 길이)의 소급
+적용 여부는 리더 판단으로 남긴다. 트러블슈팅 로그는 리더·QA 판정대로 추가하지 않았다.

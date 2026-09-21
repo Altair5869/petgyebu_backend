@@ -3,6 +3,7 @@ package com.petgyebu.telo.sync;
 import static java.util.Map.entry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 
 import com.petgyebu.telo.account.domain.Account;
 import com.petgyebu.telo.account.repository.AccountRepository;
@@ -143,6 +144,35 @@ class SyncAttemptSchemaTest {
 	}
 
 	@Test
+	@DisplayName("명세에 있는 trigger_type·result 값은 전부 저장된다 — CHECK가 과도하게 좁지 않다")
+	void definedEnumValuesAreAccepted() {
+		// 거부 케이스만 보면 CHECK 목록에서 값을 하나 빼도 통과한다. 'MANUAL'이 빠지면 사용자가
+		// 직접 누른 동기화를 기록할 수 없고, 'FAILURE'가 빠지면 실패 기록 자체가 사라져 수집
+		// 성공률이 늘 100%가 된다.
+		Account account = givenAccount("sync-check-ok-1");
+		JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+
+		jdbc.update(
+				"INSERT INTO sync_attempts (user_id, account_id, bank_code, trigger_type, "
+						+ "attempted_at, result, failure_reason) VALUES (?, ?, ?, ?, now(), ?, ?)",
+				account.getUser().getId(), account.getId(), "004", "MANUAL", "FAILURE", "타임아웃");
+		jdbc.update(
+				"INSERT INTO sync_attempts (user_id, account_id, bank_code, trigger_type, "
+						+ "attempted_at, result) VALUES (?, ?, ?, ?, now(), ?)",
+				account.getUser().getId(), account.getId(), "004", "SCHEDULED", "SUCCESS");
+
+		List<Map<String, Object>> rows = jdbc.queryForList(
+				"SELECT trigger_type, result FROM sync_attempts WHERE account_id = ? "
+						+ "ORDER BY trigger_type",
+				account.getId());
+
+		assertThat(rows)
+				.as("명세에 있는 trigger_type·result 조합이 저장되지 않았다")
+				.extracting("trigger_type", "result")
+				.containsExactly(tuple("MANUAL", "FAILURE"), tuple("SCHEDULED", "SUCCESS"));
+	}
+
+	@Test
 	@DisplayName("retry_count를 주지 않으면 0이 들어간다 — DEFAULT 0")
 	void retryCountDefaultsToZero() {
 		Account account = givenAccount("sync-default-1");
@@ -174,14 +204,18 @@ class SyncAttemptSchemaTest {
 	}
 
 	@Test
-	@DisplayName("컬럼 타입이 설계와 일치한다 — udt_name으로 못 박는다")
+	@DisplayName("컬럼 타입이 설계와 일치한다 — udt_name과 VARCHAR 길이까지")
 	void columnTypesMatchDesign() {
 		// bank_code가 정수형이면 '004'의 앞자리 0이 날아간다. retry_count는 int4로 바뀌어도
 		// Hibernate validate가 문제 삼지 않는다(T-013).
-		assertColumnType("bank_code", "varchar");
-		assertColumnType("retry_count", "int2");
-		assertColumnType("attempted_at", "timestamptz");
-		assertColumnType("account_id", "int8");
+		assertColumnType("retry_count", "int2", null);
+		assertColumnType("attempted_at", "timestamptz", null);
+		assertColumnType("account_id", "int8", null);
+
+		// VARCHAR는 길이까지 본다. udt_name은 길이가 달라도 'varchar'라 길이 변이를 못 잡는다.
+		assertColumnType("bank_code", "varchar", 10);
+		assertColumnType("result", "varchar", 10);
+		assertColumnType("failure_reason", "varchar", 500);
 	}
 
 	@Test
@@ -200,17 +234,25 @@ class SyncAttemptSchemaTest {
 				entry("retry_count", "NO")));
 	}
 
-	/** {@code TransactionSchemaTest.assertColumnType}과 같은 취지다. */
-	private void assertColumnType(String columnName, String expectedUdtName) {
-		String udtName = new JdbcTemplate(dataSource).queryForObject(
-				"SELECT udt_name FROM information_schema.columns "
+	/**
+	 * {@code TransactionSchemaTest.assertColumnType}과 같은 취지다. VARCHAR는 길이까지 본다.
+	 *
+	 * @param expectedLength VARCHAR의 길이. 문자열 타입이 아니면 null
+	 */
+	private void assertColumnType(
+			String columnName, String expectedUdtName, Integer expectedLength) {
+		Map<String, Object> column = new JdbcTemplate(dataSource).queryForMap(
+				"SELECT udt_name, character_maximum_length FROM information_schema.columns "
 						+ "WHERE table_schema = 'public' AND table_name = 'sync_attempts' "
 						+ "AND column_name = ?",
-				String.class, columnName);
+				columnName);
 
-		assertThat(udtName)
+		assertThat(column.get("udt_name"))
 				.as("sync_attempts.%s의 타입이 설계와 다르다", columnName)
 				.isEqualTo(expectedUdtName);
+		assertThat(column.get("character_maximum_length"))
+				.as("sync_attempts.%s의 길이가 설계와 다르다", columnName)
+				.isEqualTo(expectedLength);
 	}
 
 	/** {@code TransactionSchemaTest.assertNullability}와 같은 취지다. */

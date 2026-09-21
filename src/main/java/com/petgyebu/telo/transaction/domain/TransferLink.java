@@ -26,7 +26,7 @@ import lombok.NoArgsConstructor;
  *
  * <p>연결을 해제하면 이 행을 <b>삭제</b>하고 양쪽 거래의 {@code transferStatus}를
  * {@code UNLINKED}로 바꾼다. 해제 이력은 {@code transaction_edit_histories}에 남는다. 그
- * 로직은 T-018 범위라 여기에 아직 없다.
+ * 로직은 T-029 범위라 여기에 아직 없다.
  */
 @Entity
 @Table(name = "transfer_links")

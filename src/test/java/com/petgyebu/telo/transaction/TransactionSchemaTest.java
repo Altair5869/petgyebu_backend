@@ -167,6 +167,42 @@ class TransactionSchemaTest {
 	}
 
 	@Test
+	@DisplayName("명세에 있는 열거형 값은 전부 저장된다 — CHECK가 과도하게 좁지 않다")
+	void definedEnumValuesAreAccepted() {
+		// 거부 케이스만 보면 CHECK에서 값을 하나 빼도 통과한다. 예를 들어 txn_type 목록에서
+		// 'INCOME'이 사라지면 수입 거래를 DB가 거부하는데 거부 단언은 전부 초록이다.
+		// T-023에서 UNIQUE에 대해 얻은 교훈을 CHECK에 옮긴 것이다.
+		Account account = givenAccount("txn-check-ok-1");
+
+		assertRawInsertAccepted(account, "codef-ok-income", Map.of("txn_type", "INCOME"));
+		assertRawInsertAccepted(account, "codef-ok-expense", Map.of("txn_type", "EXPENSE"));
+
+		assertRawInsertAccepted(account, "codef-ok-auto",
+				Map.of("initial_classification_source", "AUTO_MATCHED"));
+		assertRawInsertAccepted(account, "codef-ok-unclassified",
+				Map.of("initial_classification_source", "UNCLASSIFIED"));
+
+		// 이체 상태 5종. 부분 인덱스가 걸린 PENDING_CONFIRM을 포함해 전부 들어가야 한다.
+		assertRawInsertAccepted(account, "codef-ok-tr-none",
+				Map.of("transfer_status", "NONE"));
+		assertRawInsertAccepted(account, "codef-ok-tr-pending",
+				Map.of("transfer_status", "PENDING_CONFIRM"));
+		assertRawInsertAccepted(account, "codef-ok-tr-auto",
+				Map.of("transfer_status", "AUTO_LINKED"));
+		assertRawInsertAccepted(account, "codef-ok-tr-user",
+				Map.of("transfer_status", "USER_CONFIRMED"));
+		assertRawInsertAccepted(account, "codef-ok-tr-unlinked",
+				Map.of("transfer_status", "UNLINKED"));
+
+		assertRawInsertAccepted(account, "codef-ok-rf-none",
+				Map.of("refund_status", "NONE"));
+		assertRawInsertAccepted(account, "codef-ok-rf-original",
+				Map.of("refund_status", "ORIGINAL"));
+		assertRawInsertAccepted(account, "codef-ok-rf-refund",
+				Map.of("refund_status", "REFUND"));
+	}
+
+	@Test
 	@DisplayName("category_id를 주지 않으면 99(미분류)가 들어간다 — DEFAULT가 실제로 발화한다")
 	void categoryIdDefaultsToUnclassified() {
 		// 다른 테이블의 DEFAULT와 달리 이 DEFAULT에는 실제 사용처가 있다. 자동 분류에서
@@ -358,6 +394,31 @@ class TransactionSchemaTest {
 	}
 
 	@Test
+	@DisplayName("사용자가 확인한 연결도 저장된다 — link_status CHECK가 'AUTO'만 남지 않았다")
+	void userConfirmedLinkStatusIsAllowed() {
+		// 거부 케이스만 보면 CHECK 목록에서 'USER_CONFIRMED'가 빠져도 통과한다. 그 스키마는
+		// 사용자가 이체로 확인하는 동작(T-029)을 통째로 막는다.
+		Account account = givenAccount("link-check-2");
+		TransferLink saved = transferLinkRepository.saveAndFlush(new TransferLink(
+				transactionRepository.saveAndFlush(transaction(account, "codef-w-8", 10_000L)),
+				transactionRepository.saveAndFlush(transaction(account, "codef-d-8", 10_000L)),
+				LinkStatus.USER_CONFIRMED,
+				null,
+				OffsetDateTime.now(AppZone.clock()),
+				OffsetDateTime.now(AppZone.clock())));
+
+		assertThat(transferLinkRepository.findById(saved.getId()))
+				.get()
+				.satisfies(found -> {
+					assertThat(found.getLinkStatus()).isEqualTo(LinkStatus.USER_CONFIRMED);
+					assertThat(found.getConfirmedAt())
+							.as("사용자 확인 시각이 저장되지 않았다")
+							.isNotNull();
+					assertThat(found.getMatchReason()).isNull();
+				});
+	}
+
+	@Test
 	@DisplayName("거래를 지우면 이체 연결도 함께 지워진다 — ON DELETE CASCADE")
 	void deletingTransactionCascadesToTransferLink() {
 		Account account = givenAccount("link-cascade-1");
@@ -406,16 +467,45 @@ class TransactionSchemaTest {
 	}
 
 	@Test
-	@DisplayName("컬럼 타입이 설계와 일치한다 — udt_name으로 못 박는다")
+	@DisplayName("컬럼 타입이 설계와 일치한다 — udt_name과 VARCHAR 길이까지")
 	void columnTypesMatchDesign() {
 		// amount를 int4로, category_id를 int2 대신 int4로 바꿔도 Hibernate validate와 제약
 		// 테스트는 전부 통과한다(T-013에서 겪은 것과 같은 구멍).
-		assertColumnType("transactions", "amount", "int8");
-		assertColumnType("transactions", "category_id", "int2");
-		assertColumnType("transactions", "linked_refund_transaction_id", "int8");
-		assertColumnType("transactions", "transacted_at", "timestamptz");
-		assertColumnType("transactions", "codef_transaction_id", "varchar");
-		assertColumnType("transfer_links", "confirmed_at", "timestamptz");
+		assertColumnType("transactions", "amount", "int8", null);
+		assertColumnType("transactions", "category_id", "int2", null);
+		assertColumnType("transactions", "linked_refund_transaction_id", "int8", null);
+		assertColumnType("transactions", "transacted_at", "timestamptz", null);
+
+		// VARCHAR는 길이까지 본다. udt_name은 VARCHAR(10)이든 VARCHAR(255)든 'varchar'라
+		// 길이를 줄이는 변이(거래 식별자가 잘려 들어오는 스키마)를 udt_name만으로는 못 잡는다.
+		assertColumnType("transactions", "codef_transaction_id", "varchar", 255);
+		assertColumnType("transactions", "txn_type", "varchar", 10);
+		assertColumnType("transactions", "transfer_status", "varchar", 20);
+		assertColumnType("transactions", "memo", "varchar", 255);
+
+		assertColumnType("transfer_links", "confirmed_at", "timestamptz", null);
+		assertColumnType("transfer_links", "link_status", "varchar", 20);
+		assertColumnType("transfer_links", "match_reason", "varchar", 255);
+	}
+
+	@Test
+	@DisplayName("category_id는 categories를 참조한다 — 없는 카테고리는 저장할 수 없다")
+	void categoryForeignKeyIsEnforced() {
+		// REFERENCES categories (id)를 통째로 지워도 다른 단언은 전부 통과한다. 자동 분류가
+		// 엉뚱한 카테고리 ID를 써도 DB가 받아주는 스키마가 된다.
+		Account account = givenAccount("txn-fk-1");
+		JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+
+		assertThatThrownBy(() -> jdbc.update(
+				"INSERT INTO transactions (user_id, account_id, codef_transaction_id, "
+						+ "transacted_at, amount, txn_type, initial_classification_source, "
+						+ "category_id) VALUES (?, ?, ?, now(), ?, ?, ?, ?)",
+				account.getUser().getId(), account.getId(), "codef-fk-1", 1_000L,
+				"EXPENSE", "UNCLASSIFIED", (short) 1234))
+				.as("category_id에 categories FK가 없다")
+				.isInstanceOf(DataIntegrityViolationException.class)
+				.rootCause()
+				.hasMessageContaining("transactions_category_id_fkey");
 	}
 
 	@Test
@@ -472,22 +562,48 @@ class TransactionSchemaTest {
 	private void assertRawInsertRejected(
 			Account account, String codefTransactionId, Map<String, String> overrides,
 			String constraintName) {
-		String txnType = overrides.getOrDefault("txn_type", "EXPENSE");
-		String source = overrides.getOrDefault("initial_classification_source", "UNCLASSIFIED");
-		String transferStatus = overrides.getOrDefault("transfer_status", "NONE");
-		String refundStatus = overrides.getOrDefault("refund_status", "NONE");
-		JdbcTemplate jdbc = new JdbcTemplate(dataSource);
-
-		assertThatThrownBy(() -> jdbc.update(
-				"INSERT INTO transactions (user_id, account_id, codef_transaction_id, "
-						+ "transacted_at, amount, txn_type, initial_classification_source, "
-						+ "transfer_status, refund_status) VALUES (?, ?, ?, now(), ?, ?, ?, ?, ?)",
-				account.getUser().getId(), account.getId(), codefTransactionId, 1_000L,
-				txnType, source, transferStatus, refundStatus))
+		assertThatThrownBy(() -> rawInsert(account, codefTransactionId, overrides))
 				.as("CHECK 제약 %s가 없다", constraintName)
 				.isInstanceOf(DataIntegrityViolationException.class)
 				.rootCause()
 				.hasMessageContaining(constraintName);
+	}
+
+	/**
+	 * 명세에 있는 값이 실제로 저장되는지 확인한다.
+	 *
+	 * <p>거부 케이스의 짝이다. CHECK 목록에서 값을 빼는 변이는 거부 단언으로는 잡히지 않는다.
+	 * 저장 후 값을 되읽어, 들어갔지만 다른 값으로 바뀌는 경우까지 함께 본다.
+	 */
+	private void assertRawInsertAccepted(
+			Account account, String codefTransactionId, Map<String, String> overrides) {
+		String column = overrides.keySet().iterator().next();
+		String expected = overrides.get(column);
+
+		rawInsert(account, codefTransactionId, overrides);
+
+		String stored = new JdbcTemplate(dataSource).queryForObject(
+				"SELECT " + column + " FROM transactions WHERE codef_transaction_id = ?",
+				String.class, codefTransactionId);
+		assertThat(stored)
+				.as("%s = '%s'가 저장되지 않았다. CHECK 목록에서 이 값이 빠졌을 가능성이 높다",
+						column, expected)
+				.isEqualTo(expected);
+	}
+
+	private void rawInsert(
+			Account account, String codefTransactionId, Map<String, String> overrides) {
+		String txnType = overrides.getOrDefault("txn_type", "EXPENSE");
+		String source = overrides.getOrDefault("initial_classification_source", "UNCLASSIFIED");
+		String transferStatus = overrides.getOrDefault("transfer_status", "NONE");
+		String refundStatus = overrides.getOrDefault("refund_status", "NONE");
+
+		new JdbcTemplate(dataSource).update(
+				"INSERT INTO transactions (user_id, account_id, codef_transaction_id, "
+						+ "transacted_at, amount, txn_type, initial_classification_source, "
+						+ "transfer_status, refund_status) VALUES (?, ?, ?, now(), ?, ?, ?, ?, ?)",
+				account.getUser().getId(), account.getId(), codefTransactionId, 1_000L,
+				txnType, source, transferStatus, refundStatus);
 	}
 
 	/**
@@ -498,15 +614,19 @@ class TransactionSchemaTest {
 	 * Hibernate validate도 PostgreSQL의 FK 비교도 둘을 구분하지 않아 바뀌어도 아무도 잡지
 	 * 못한다(T-013).
 	 */
-	private void assertColumnType(String tableName, String columnName, String expectedUdtName) {
-		String udtName = new JdbcTemplate(dataSource).queryForObject(
-				"SELECT udt_name FROM information_schema.columns "
+	private void assertColumnType(
+			String tableName, String columnName, String expectedUdtName, Integer expectedLength) {
+		Map<String, Object> column = new JdbcTemplate(dataSource).queryForMap(
+				"SELECT udt_name, character_maximum_length FROM information_schema.columns "
 						+ "WHERE table_schema = 'public' AND table_name = ? AND column_name = ?",
-				String.class, tableName, columnName);
+				tableName, columnName);
 
-		assertThat(udtName)
+		assertThat(column.get("udt_name"))
 				.as("%s.%s의 타입이 설계와 다르다", tableName, columnName)
 				.isEqualTo(expectedUdtName);
+		assertThat(column.get("character_maximum_length"))
+				.as("%s.%s의 길이가 설계와 다르다", tableName, columnName)
+				.isEqualTo(expectedLength);
 	}
 
 	/**
