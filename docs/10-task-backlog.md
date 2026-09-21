@@ -134,7 +134,7 @@ chore/{슬러그}               F-ID 없는 인프라·기술 부채
 | | ID | 제목 | 브랜치 | 완료 기준 | 의존 | 차단 |
 |---|---|---|---|---|---|---|
 | [ ] | T-040 | Spring Batch 메타 테이블 마이그레이션 | `chore/batch-schema` | `schema-postgresql.sql`을 마이그레이션으로 옮긴다. **직접 작성하지 않는다** | T-023 | — |
-| [ ] | T-041 | 보상·상점 스키마와 시드 | `feature/F-HPWCNJ-schema` | `credit_balances`·`reward_grants`·`shop_items`·`user_items` 생성. 슬롯 4종 시드. `(user_id, item_type) WHERE is_placed` 부분 유니크 동작 | T-023 | — |
+| [x] | T-041 | 보상·상점 스키마와 시드 | `feature/F-HPWCNJ-schema` | ✅ 완료. QA PASS 14 / FIX 3 / REDO 0. `shop_items` 시드는 아이템 목록·에셋이 확정되지 않아 T-044로 미뤘다 | T-023 | #21 |
 | [ ] | T-042 | s9 예산 기간 전환 배치 | `feature/F-FZUVLV-period-batch` | 매일 KST 00:05 실행. 기간 종료→새 기간 생성→상태 재계산이 **단일 트랜잭션**. 중간 실패 시 전부 롤백되는 것을 확인 | T-026, T-040 | — |
 | [ ] | T-043 | 절약 조건 판정과 크레딧 지급 | `feature/F-EZZFNU-reward` | 스냅샷 기준 판정. 10% 이상 감소 조건. 첫 기간은 비교 조건 생략. 중복 지급이 유니크 제약으로 막힌다. `SELECT FOR UPDATE` 확인 | T-041, T-042 | — |
 | [ ] | T-044 | 상점 목록·구매 API | `feature/F-HPWCNJ-shop` | 잔액 부족 시 구매가 막히고 부족분이 안내된다. 구매 시 `price_paid`에 당시 가격이 남는다 | T-041, T-043 | — |
@@ -225,3 +225,24 @@ chore/{슬러그}               F-ID 없는 인프라·기술 부채
 | `DEFAULT` | 18 | 애플리케이션 경로에서 엔티티가 항상 값을 채워 DEFAULT가 발화하지 않는다. 실사용처가 있는 `transactions.category_id DEFAULT 99`만 예외로 이미 단언돼 있다. raw SQL이나 배치 INSERT가 생기면 그때 재검토한다 |
 
 **앞으로 스키마 Task를 할 때**: 위 "덮인 축" 6가지를 처음부터 전부 넣는다. 각 Task 입력 명세에 이 표를 옮겨 적는다. 그리고 **같은 제약이 두 컬럼에 걸려 있으면 양쪽을 각각 확인한다** — 한쪽만 보면 다른 쪽이 통째로 비어도 통과한다.
+
+### 축 7: 엔티티 경로 (2026-09-21, T-041 QA에서 추가)
+
+**이번 Task가 만든 엔티티는 최소 한 번 리포지토리로 저장하고 되읽어 확인한다.**
+
+T-041에서 이 축이 비어 구멍 둘이 났다. 스키마 테스트의 단언이 전부 `JdbcTemplate` raw INSERT 경로에만 있어 엔티티를 지나가지 않았다.
+
+- `UserItem`의 `this.isPlaced = false`를 `true`로 뒤집어도 19건 전부 통과했다. 뒤집히면 구매 즉시 방에 배치되고 같은 슬롯 두 번째 아이템은 구매 자체가 부분 유니크에 막힌다
+- `RewardGrant` 생성자에서 판정 근거 두 값을 뒤바꿔도 14건 전부 통과했다. `RewardGrant`를 `new`로 만드는 코드가 저장소 전체에 없었고 `RewardGrantRepository`는 사용처가 0이었다
+
+`ddl-auto: validate`는 컬럼 존재와 타입만 본다. 생성자 인자 순서, `@Enumerated(STRING)`의 실제 동작, null 허용 필드가 정말 NULL로 내려가는지는 전부 검증 밖이다.
+
+**앞선 여섯 Task는 우연히 충족했다.** `givenUser` 같은 픽스처를 엔티티 리포지토리로 만들어 와서 엔티티 경로가 늘 한 번은 지나갔다. T-041은 판정 근거·배치 상태가 픽스처에 필요 없는 값이라 그 우연이 끊겼다. 우연한 커버리지에 기대면 안 된다는 것이 트러블슈팅 19·20번의 교훈이다.
+
+**raw INSERT 자체는 필요하다.** CHECK 거부 케이스는 `@Enumerated(STRING)` 때문에 JPA로 잘못된 값을 넣을 수 없어 raw INSERT가 유일한 경로다(19번). 두 경로를 함께 쓰되 엔티티 경로가 비지 않게 한다.
+
+### 이월 사항
+
+- **`assertIndex` 헬퍼가 다섯 벌로 갈렸다.** T-013 QA 6번·T-014 QA 13번의 통일 권고가 그대로 남아 있다. 이 헬퍼는 `endsWith`로 `indexdef`의 꼬리만 보므로 **`CREATE UNIQUE INDEX`→`CREATE INDEX` 변이를 구조적으로 잡지 못한다**(`UNIQUE`가 문자열 앞쪽에 있다). 통일 Task에서 `indexdef` 전체 비교로 바꾸면 함께 해소된다
+- **T-044 입력에 넣을 것**: `docs/10-task-backlog.md`의 "단언하지 않기로 한 것" 표가 DEFAULT를 제외하며 "raw SQL INSERT가 생기면 재검토"를 조건으로 달았는데, **T-044의 `shop_items` 시드가 그 조건을 발화시킨다.** 시드가 `is_active`·`sort_order`를 생략하면 두 DEFAULT가 실사용 경로가 된다
+- **기록용(지적 아님)**: F-EZZFNU dataSpec(`docs/02-requirements-features.md:413`)의 "지급 상태"에 대응하는 컬럼이 `reward_grants`에 없다. `09-db-design.md` 5.2가 설계 단계에서 내린 결정이고 T-041은 설계를 정확히 따랐다
