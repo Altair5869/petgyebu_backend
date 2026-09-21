@@ -31,8 +31,9 @@
 | 15 | `git reset --hard`로 커밋 전 작업 유실 | 작업 실수 | — |
 | 16 | 마이그레이션 순서 검사가 커밋 전에는 조용히 건너뛴다 | 검증 방법 | #16 |
 | 17 | 인덱스를 지워도 빌드와 스키마 테스트가 전부 통과한다 | **조용한 실패** / 테스트 설계 | #18 |
+| 18 | `NOT NULL`을 지워도 빌드와 스키마 테스트가 전부 통과한다 | **조용한 실패** / 테스트 설계 | #19 |
 
-**가장 많이 나온 유형은 "조용한 실패"다.** 빌드도 기동도 성공하는데 기능만 비어 있는 경우가 6건이었다. 이 유형이 위험한 이유는 아래 마지막 절에 정리했다.
+**가장 많이 나온 유형은 "조용한 실패"다.** 빌드도 기동도 성공하는데 기능만 비어 있는 경우가 7건이었다. 이 유형이 위험한 이유는 아래 마지막 절에 정리했다.
 
 ---
 
@@ -591,7 +592,9 @@ QA가 유니크 제약 쪽에서는 변이 5회로 **각 열까지 고정돼 있
 
 두 가지를 차례로 확인했다.
 
-1. `ddl-auto: validate`의 검사 범위 — 테이블·열·타입·nullable은 보지만 인덱스는 보지 않는다.
+1. `ddl-auto: validate`의 검사 범위 — 테이블·열·타입은 보지만 인덱스는 보지 않는다.
+   (**정정**: 이때는 여기에 nullable도 포함된다고 적었는데 틀렸다. 18번에서 확인했듯
+   `validate`는 nullability를 보지 않는다.)
    `bank_code`를 `BIGINT`로 바꿨을 때는 컨텍스트 로딩 단계에서 9건 전부 죽었는데
    (`String` 필드 ↔ `BIGINT` 열 불일치), 인덱스를 지울 때는 아무 반응이 없었다
 2. 제약 테스트가 무엇을 보는가 — 전부 "이 INSERT가 거부되는가 / 허용되는가"다.
@@ -691,11 +694,166 @@ T-023의 유니크 제약에서도 나왔는데(이름만 확인하면 제약을
 
 ---
 
+## 18. `NOT NULL`을 지워도 빌드와 스키마 테스트가 전부 통과한다
+
+**증상**
+
+T-013(`categories`·`merchant_keyword_rules` 스키마)의 QA 검증 중, 마이그레이션에서
+`keywords JSONB NOT NULL`의 `NOT NULL`을 지우고 돌렸는데 아무것도 빨간불이 되지 않았다.
+
+```
+$ # V202609210052__create_categories.sql 에서 keywords 의 NOT NULL 제거
+BUILD SUCCESSFUL
+9 tests completed, 0 failed
+```
+
+엔티티에는 `@Column(nullable = false)`가 분명히 붙어 있고, `PostgresMigrationTest`는
+`ddl-auto: validate`로 뜬다. 그런데도 제약이 사라진 것을 아무도 모른다.
+
+**진단**
+
+17번(인덱스)과 같은 계열로 보였지만 결정적으로 다른 점이 있었다. 인덱스는 **느린 답**을
+내지만 `NOT NULL`은 **틀린 데이터**를 들인다. 그래서 왜 안 잡히는지를 따로 따져야 했다.
+
+세 겹이 동시에 비어 있었다.
+
+1. **`ddl-auto: validate`가 nullability를 보지 않는다.** 17번에서 "테이블·열·타입·nullable은
+   본다"고 적었는데 이것이 틀렸다. 실제로는 타입까지다. 타입을 바꿨을 때
+   (`bank_code`를 `BIGINT`로) 컨텍스트 로딩 단계에서 전부 죽었던 경험을 nullability에도
+   적용된다고 넘겨짚은 것이었다. `NOT NULL`을 지우고 돌리니 컨텍스트가 멀쩡히 떴다
+2. **엔티티의 `@Column(nullable = false)`는 DDL 생성용이다.** 이 프로젝트는 Flyway가
+   테이블을 만들고 Hibernate는 검증만 하므로, 이 속성은 운영 경로에서 **아무 일도 하지
+   않는다.** 문서 역할만 한다
+3. **제약 테스트는 늘 제대로 된 값을 넣는다.** 빈 값을 막는 규칙이 있든 없든 INSERT는
+   성공하고 결과도 같다. 17번의 "결과 축" 문제가 여기서도 반복된다
+
+**원인**
+
+세 겹이 전부 같은 축을 비켜 간다. 검증망 어디에도 "이 열이 null을 거부하는가"를 보는
+눈이 없었다. 그래서 마이그레이션에서 `NOT NULL`이 사라져도 빌드는 끝까지 초록이다.
+
+인덱스와 달리 이것은 성능 문제가 아니다. `merchant_keyword_rules.keywords`가 null을
+허용하면 키워드가 빈 룰이 들어오고, T-019 자동 분류가 그 행에서 NPE를 내거나 조용히
+건너뛴다. `accounts.codef_connected_id`가 null을 허용하면 해지할 커넥티드아이디가 없는
+계좌가 생겨 탈퇴(F-ZPNVKT)가 반쯤 실패한다.
+
+**해결**
+
+`information_schema.columns`에서 테이블 전체의 `column_name → is_nullable` 맵을 한 번에
+읽어 기대 맵과 **통째로** 비교한다. 테이블당 쿼리 하나, 단언 하나다.
+
+```java
+private void assertNullability(String tableName, Map<String, String> expected) {
+	List<Map<String, Object>> columns = new JdbcTemplate(dataSource).queryForList(
+			"SELECT column_name, is_nullable FROM information_schema.columns "
+					+ "WHERE table_schema = 'public' AND table_name = ?",
+			tableName);
+
+	Map<String, String> actual = columns.stream().collect(Collectors.toMap(
+			column -> (String) column.get("column_name"),
+			column -> (String) column.get("is_nullable")));
+
+	assertThat(actual)
+			.as("%s 테이블의 NOT NULL 구성이 설계와 다르다", tableName)
+			.containsExactlyInAnyOrderEntriesOf(expected);
+}
+```
+
+**열을 하나씩 단언하지 않은 것이 요점이다.** 하나씩 보면 `NOT NULL`이 사라지는 쪽만
+막힌다. 통째로 비교하면 반대 방향 — 원래 null을 허용하던 열(`users.email`,
+`accounts.account_name`, `status_thresholds.end_rate` 등)에 실수로 `NOT NULL`이 붙는 것 —
+도 함께 걸리고, 열이 늘거나 없어지는 것까지 걸린다. null 허용은 의도적 설계다.
+`users.email`은 애플의 이메일 가리기 때문에, `status_thresholds.end_rate`는 `OVER_BUDGET`에
+상한이 없기 때문에 null이다. 이쪽이 막히는 것도 결함이다.
+
+네 스키마 테스트(`UserSchemaTest`·`BudgetSchemaTest`·`AccountSchemaTest`·`CategorySchemaTest`)에
+같은 모양으로 넣어 테이블 7개를 덮었다. 17번과 마찬가지로 공유 유틸리티 클래스는 만들지
+않고 각 파일에 같은 모양의 헬퍼를 뒀다.
+
+**검증**
+
+테이블 7개 전부에 대해 (a) `NOT NULL` 열에서 `NOT NULL` 제거, null 허용 열이 있는 테이블
+3개에 대해 (b) null 허용 열에 `NOT NULL` 추가 — 합 10회. 마이그레이션은 매회 백업에서
+원복했다.
+
+```
+### (a) users.provider NOT NULL 제거
+users·user_consents 스키마 제약 검증 > NOT NULL 구성이 설계와 정확히 일치한다 — 빠진 것도 더 붙은 것도 없다 FAILED
+6 tests completed, 1 failed / BUILD FAILED in 7s
+
+### (a) user_consents.consent_version NOT NULL 제거
+6 tests completed, 1 failed / BUILD FAILED in 7s
+
+### (a) budget_periods.target_amount NOT NULL 제거
+10 tests completed, 1 failed / BUILD FAILED in 7s
+
+### (a) status_thresholds.start_rate NOT NULL 제거
+10 tests completed, 1 failed / BUILD FAILED in 7s
+
+### (a) accounts.codef_connected_id NOT NULL 제거
+10 tests completed, 1 failed / BUILD FAILED in 7s
+
+### (a) categories.code NOT NULL 제거
+10 tests completed, 1 failed / BUILD FAILED in 7s
+
+### (a) merchant_keyword_rules.keywords NOT NULL 제거
+10 tests completed, 1 failed / BUILD FAILED in 7s
+
+### (b) users.email 에 NOT NULL 추가
+6 tests completed, 4 failed / BUILD FAILED in 7s
+
+### (b) status_thresholds.end_rate 에 NOT NULL 추가
+10 tests completed, 3 failed / BUILD FAILED in 7s
+
+### (b) accounts.account_name 에 NOT NULL 추가
+10 tests completed, 9 failed / BUILD FAILED in 7s
+```
+
+**반영 전에는 (a) 7회가 전부 `BUILD SUCCESSFUL`이었다.** 이것이 양방향의 한쪽이다.
+
+(a)에서 실패한 것이 매회 **새 단언 하나뿐**(`... 1 failed`)이라는 점이 다른 한쪽이다.
+기존 테스트는 `NOT NULL`의 유무에 전혀 반응하지 않는다는 뜻이고, 곧 이 구멍은 별도
+단언 없이는 메울 수 없다는 증거다.
+
+(b)는 실패 건수가 더 크다. 원래 null을 넣던 기존 테스트들이 함께 깨지기 때문이다.
+`accounts.account_name`이 9건까지 번진 것은 이 테스트의 `account()` 헬퍼가 모든 경우에
+`accountName`을 null로 넘기기 때문이다. 다만 **기존 테스트만으로는 방향이 모호하다.**
+"account_name에 NOT NULL이 붙었다"가 아니라 "계좌 저장이 깨졌다"로만 읽힌다. 새 단언이
+어느 열이 어떻게 달라졌는지를 짚어 준다.
+
+반영 후 전체 빌드는 초록이다.
+
+```
+$ ./gradlew build --rerun-tasks
+BUILD SUCCESSFUL in 16s
+```
+
+네 스키마 테스트가 각각 1건씩 늘어 전체 41 → 45건이 됐다.
+
+**배운 것**
+
+**17번에서 내가 적은 `validate`의 검사 범위가 틀렸다.** "테이블·열·타입·nullable은 본다"고
+썼는데 nullable은 보지 않는다. 타입 변이 한 번이 컨텍스트를 죽인 것을 보고 그 옆 칸까지
+같이 덮였다고 넘겨짚은 것이다. **한 축이 막혔다는 관측은 옆 축이 막혔다는 근거가 되지
+않는다.** 축마다 따로 변이를 돌려야 알 수 있다.
+
+**엔티티에 적힌 제약이 반드시 강제되는 제약은 아니다.** `@Column(nullable = false)`는
+스키마를 Hibernate가 만들 때만 의미가 있다. Flyway로 옮긴 순간 이 속성은 주석이 됐는데,
+코드만 읽으면 여전히 강제되는 것처럼 보인다. **어느 층이 그 규칙을 실제로 집행하는지를
+층 단위로 따져야 한다.**
+
+**같은 계열이어도 피해의 성격이 다르면 우선순위가 다르다.** 17번은 느려지는 문제였고
+이것은 틀린 데이터가 들어오는 문제다. 인덱스가 빠진 채 배포되면 나중에 느려질 뿐이지만
+`NOT NULL`이 빠진 채 배포되면 그 사이 들어온 null 행이 남는다. 마이그레이션으로 제약을
+되돌릴 때 기존 행 때문에 실패하므로 정리 작업이 따로 필요해진다.
+
+---
+
 ## 되짚어 보기
 
 ### 조용한 실패가 가장 많았다
 
-17건 중 6건(3·4·9·10·11·17번)이 **빌드도 기동도 성공하는데 기능만 비어 있는** 유형이었다.
+18건 중 7건(3·4·9·10·11·17·18번)이 **빌드도 기동도 성공하는데 기능만 비어 있는** 유형이었다.
 
 | 사례 | 겉보기 | 실제 |
 |---|---|---|
@@ -705,6 +863,7 @@ T-023의 유니크 제약에서도 나왔는데(이름만 확인하면 제약을
 | local 프로필 테스트 | 테스트 통과 | 운영 스키마 경로 미검증 |
 | out-of-order 마이그레이션 | 새 DB에서 통과 | 운영 DB에서만 실패 |
 | 인덱스 누락 | 빌드 통과, 스키마 테스트 8건 전부 통과 | 인덱스 0개, 조회가 풀스캔 |
+| `NOT NULL` 누락 | 빌드 통과, `validate` 통과, 스키마 테스트 9건 전부 통과 | 열이 null을 받는다 |
 
 공통점이 있다. **성공 신호가 있어서 더 위험하다.** 에러가 나면 고치게 되지만 이들은 "잘 되고 있다"는 잘못된 확신을 준다.
 
@@ -719,6 +878,7 @@ T-023의 유니크 제약에서도 나왔는데(이름만 확인하면 제약을
 - 마이그레이션 테스트: 마이그레이션 없이 엔티티만 추가하면 정말 실패하는지
 - CI 가드: 낮은 버전을 넣으면 정말 빌드가 깨지는지
 - 인덱스 단언: 인덱스를 지우거나 대상 열을 바꾸면 정말 테스트가 깨지는지
+- `NOT NULL` 단언: 제약을 지우면, 그리고 **반대로** null 허용 열에 제약을 붙이면 정말 테스트가 깨지는지
 
 통과만 확인하면 "원래부터 통과했을" 가능성을 배제할 수 없다. **막으려던 것이 실제로 막히는지 확인해야 그 방어가 작동한다고 말할 수 있다.**
 
