@@ -141,13 +141,64 @@ class BudgetSchemaTest {
 	}
 
 	@Test
-	@DisplayName("목표 금액이 0 이하인 예산 기간은 저장할 수 없다")
+	@DisplayName("목표 금액이 0 이하인 예산 기간은 저장할 수 없다 — 0과 음수 둘 다")
 	void nonPositiveTargetAmountIsRejected() {
 		User user = givenUser("budget-amount-1");
 
 		assertThatThrownBy(() -> budgetPeriodRepository.saveAndFlush(septemberPeriod(user, 0L)))
 				.as("CHECK (target_amount > 0)이 없다")
-				.isInstanceOf(DataIntegrityViolationException.class);
+				.isInstanceOf(DataIntegrityViolationException.class)
+				// 이름까지 본다. 이름을 확인하지 않으면 다른 제약 위반으로 실패해도 초록이 된다.
+				.rootCause()
+				.hasMessageContaining("ck_budget_periods_target_amount");
+
+		assertThatThrownBy(() -> budgetPeriodRepository.saveAndFlush(septemberPeriod(user, -1L)))
+				.as("음수 목표 금액이 저장됐다")
+				.isInstanceOf(DataIntegrityViolationException.class)
+				.rootCause()
+				.hasMessageContaining("ck_budget_periods_target_amount");
+	}
+
+	@Test
+	@DisplayName("정의되지 않은 status·status_code는 저장할 수 없다 — CHECK 제약")
+	void undefinedEnumValuesAreRejected() {
+		// 엔티티 쪽은 열거형이라 잘못된 값이 들어갈 수 없다. CHECK가 실제로 붙어 있는지는
+		// SQL로 직접 넣어봐야 드러난다.
+		//
+		// 허용 케이스(definedEnumValuesAreAccepted)와 짝이며 서로를 대체하지 않는다.
+		// 허용 케이스는 목록에서 값이 빠지는 것을, 여기서는 CHECK가 통째로 사라지는 것을 잡는다.
+		User user = givenUser("budget-reject-1");
+		JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+
+		assertThatThrownBy(() -> jdbc.update(
+				"INSERT INTO budget_periods (user_id, period_start, period_end, target_amount, "
+						+ "target_amount_snapshot, status) VALUES (?, ?, ?, ?, ?, ?)",
+				user.getId(), SEPTEMBER_START, SEPTEMBER_END, 300_000L, 300_000L, "PENDING"))
+				.as("CHECK (status IN ('ACTIVE', 'CLOSED'))가 없다")
+				.isInstanceOf(DataIntegrityViolationException.class)
+				.rootCause()
+				.hasMessageContaining("ck_budget_periods_status");
+
+		Long periodId = budgetPeriodRepository.saveAndFlush(septemberPeriod(user, 300_000L)).getId();
+
+		assertThatThrownBy(() -> jdbc.update(
+				"INSERT INTO status_thresholds (budget_period_id, status_code, start_rate, "
+						+ "end_rate, sort_order) VALUES (?, ?, ?, ?, ?)",
+				periodId, "HAPPY", new BigDecimal("0.00"), new BigDecimal("40.00"), (short) 1))
+				.as("CHECK (status_code IN (...))가 없다")
+				.isInstanceOf(DataIntegrityViolationException.class)
+				.rootCause()
+				.hasMessageContaining("ck_status_thresholds_status_code");
+
+		// 값 범위 CHECK도 같은 방식으로 본다. 음수 사용률 구간은 존재할 수 없다.
+		assertThatThrownBy(() -> jdbc.update(
+				"INSERT INTO status_thresholds (budget_period_id, status_code, start_rate, "
+						+ "end_rate, sort_order) VALUES (?, ?, ?, ?, ?)",
+				periodId, "REST", new BigDecimal("-0.01"), new BigDecimal("40.00"), (short) 1))
+				.as("CHECK (start_rate >= 0)이 없다")
+				.isInstanceOf(DataIntegrityViolationException.class)
+				.rootCause()
+				.hasMessageContaining("ck_status_thresholds_start_rate");
 	}
 
 	@Test

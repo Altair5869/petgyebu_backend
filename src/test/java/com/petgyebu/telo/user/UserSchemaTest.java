@@ -110,6 +110,48 @@ class UserSchemaTest {
 	}
 
 	@Test
+	@DisplayName("정의되지 않은 열거형 값은 저장할 수 없다 — CHECK 제약 셋")
+	void undefinedEnumValuesAreRejected() {
+		// 엔티티 쪽은 열거형이라 잘못된 값이 들어갈 수 없다. CHECK가 실제로 붙어 있는지는
+		// SQL로 직접 넣어봐야 드러난다.
+		//
+		// 허용 케이스(definedEnumValuesAreAccepted)와 짝이며 서로를 대체하지 않는다.
+		// 허용 케이스는 CHECK 목록에서 값이 빠지는 것을, 이 거부 케이스는 CHECK가 통째로
+		// 사라지는 것을 잡는다. 제약이 없어지면 모든 값이 통과하므로 허용 단언은 전부 초록이다.
+		JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+
+		assertThatThrownBy(() -> jdbc.update(
+				"INSERT INTO users (provider, provider_user_id) VALUES (?, ?)",
+				"NAVER", "reject-provider-1"))
+				.as("CHECK (provider IN ('KAKAO', 'APPLE'))가 없다")
+				.isInstanceOf(DataIntegrityViolationException.class)
+				// 이름까지 본다. 이름을 확인하지 않으면 NOT NULL이나 UNIQUE 위반으로 실패해도
+				// 이 테스트가 초록이 된다.
+				.rootCause()
+				.hasMessageContaining("ck_users_provider");
+
+		assertThatThrownBy(() -> jdbc.update(
+				"INSERT INTO users (provider, provider_user_id, character_type) VALUES (?, ?, ?)",
+				"KAKAO", "reject-character-1", "BIRD"))
+				.as("CHECK (character_type IN ('DOG', 'CAT'))가 없다")
+				.isInstanceOf(DataIntegrityViolationException.class)
+				.rootCause()
+				.hasMessageContaining("ck_users_character_type");
+
+		Long userId = userRepository.saveAndFlush(
+				new User(AuthProvider.KAKAO, "reject-consent-1", null, OffsetDateTime.now()))
+				.getId();
+		assertThatThrownBy(() -> jdbc.update(
+				"INSERT INTO user_consents (user_id, consent_type, consent_version, consented_at) "
+						+ "VALUES (?, ?, ?, now())",
+				userId, "MARKETING", "v1.0"))
+				.as("CHECK (consent_type IN (...))가 없다")
+				.isInstanceOf(DataIntegrityViolationException.class)
+				.rootCause()
+				.hasMessageContaining("ck_user_consents_consent_type");
+	}
+
+	@Test
 	@DisplayName("명세에 있는 열거형 값은 전부 저장된다 — CHECK가 과도하게 좁지 않다")
 	void definedEnumValuesAreAccepted() {
 		// 거부 케이스만 보면 CHECK 목록에서 값을 하나 빼도 통과한다. provider에서 'APPLE'이

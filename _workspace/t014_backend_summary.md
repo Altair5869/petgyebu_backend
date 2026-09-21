@@ -449,3 +449,87 @@ UserSchemaTest         tests="8"
 
 트러블슈팅 로그 19번을 추가했다(분류: 조용한 실패 / 테스트 설계, PR `—`). 요약 표 행, "조용한
 실패" 건수 7 → 8, 되짚어 보기 표와 양방향 검증 목록까지 함께 갱신했다.
+
+---
+
+## CHECK 거부 케이스 보강 (푸시 전 점검 반영)
+
+리더가 찾은 구멍이다. 앞 절에서 채운 것은 **허용 케이스**뿐이었고, 세 파일에는 **거부
+케이스가 원래 없었다.** `ck_users_provider`·`ck_users_character_type`을 통째로 삭제해도
+`UserSchemaTest`가 통과했다.
+
+**허용과 거부는 서로를 대체하지 않는다.** 제약이 통째로 사라지면 모든 값이 통과하므로 허용
+단언은 전부 초록이고, 목록에서 값 하나만 빠지면 거부 단언이 그대로 통과한다.
+
+### 고친 파일 (테스트만, 마이그레이션 무변경)
+
+```
+src/test/java/com/petgyebu/telo/user/UserSchemaTest.java      (8 → 9건)
+src/test/java/com/petgyebu/telo/budget/BudgetSchemaTest.java  (12 → 13건)
+docs/11-troubleshooting-log.md                                 (19번 수정, 새 항목 안 만듦)
+```
+
+- `UserSchemaTest.undefinedEnumValuesAreRejected` — `ck_users_provider`(`'NAVER'`),
+  `ck_users_character_type`(`'BIRD'`), `ck_user_consents_consent_type`(`'MARKETING'`)
+- `BudgetSchemaTest.undefinedEnumValuesAreRejected` — `ck_budget_periods_status`(`'PENDING'`),
+  `ck_status_thresholds_status_code`(`'HAPPY'`), `ck_status_thresholds_start_rate`(`-0.01`)
+- `BudgetSchemaTest.nonPositiveTargetAmountIsRejected` — 기존 테스트에 **제약 이름 단언**과
+  **음수 케이스**를 더했다(원래는 이름을 보지 않아 다른 제약 위반으로 실패해도 초록이었다)
+
+전부 `JdbcTemplate` raw INSERT다. `@Enumerated(STRING)` 때문에 JPA로는 잘못된 값 자체를
+넣을 수 없다(T-006에서 짚은 지점). 모든 단언이 `.rootCause().hasMessageContaining("ck_...")`로
+제약 이름을 확인한다.
+
+### `CategorySchemaTest`는 고치지 않았다
+
+`categories`에도 `merchant_keyword_rules`에도 **CHECK가 하나도 없다**(`grep -c CHECK` = 0).
+제약이 UNIQUE·FK·NOT NULL뿐이라 거부할 CHECK가 없다. 없는 것을 만들지 않았다.
+
+### 양방향 증명
+
+**(a) CHECK 4개 통째 삭제** — `ck_users_provider`, `ck_users_character_type`,
+`ck_budget_periods_status`, `ck_status_thresholds_start_rate`
+
+```
+--- BEFORE (거부 케이스 없던 테스트 + 같은 변이) ---
+$ ./gradlew test --rerun-tasks --tests '*UserSchemaTest' --tests '*BudgetSchemaTest'
+BUILD SUCCESSFUL in 10s
+
+--- AFTER (거부 케이스 추가 후) ---
+budget_periods·status_thresholds 스키마 제약 검증 > 정의되지 않은 status·status_code는 저장할 수 없다 — CHECK 제약 FAILED
+users·user_consents 스키마 제약 검증 > 정의되지 않은 열거형 값은 저장할 수 없다 — CHECK 제약 셋 FAILED
+22 tests completed, 2 failed
+BUILD FAILED in 10s
+
+java.lang.AssertionError: Expecting code to raise a throwable.
+```
+
+**(b) 값 하나 제거 vs 통째 삭제가 서로 다른 테스트에 걸린다** — 같은 CHECK
+(`ck_budget_periods_status`) 하나로 비교했다.
+
+```
+=== (i) 'CLOSED' 값 하나만 제거 ===
+budget_periods·status_thresholds … > 명세에 있는 열거형 값은 전부 저장된다 — CHECK가 과도하게 좁지 않다 FAILED
+13 tests completed, 1 failed
+
+=== (ii) ck_budget_periods_status 통째 삭제 ===
+budget_periods·status_thresholds … > 정의되지 않은 status·status_code는 저장할 수 없다 — CHECK 제약 FAILED
+13 tests completed, 1 failed
+```
+
+(i)에서는 거부 테스트가, (ii)에서는 허용 테스트가 각각 통과한다. **한쪽만 있으면 다른 쪽
+변이가 그대로 새어 나간다는 뜻이다.**
+
+### 검증
+
+```
+$ git checkout HEAD -- src/main/resources/db/migration/   # 변이 원복, diff 없음 확인
+$ ./gradlew build --rerun-tasks
+BUILD SUCCESSFUL in 21s
+
+Account 12 / Budget 13 / Category 11 / Sync 9 / Transaction 22 / User 9
+```
+
+트러블슈팅 19번에 "같은 실수가 한 번 더" 절과 "이 세션에서 같은 모양의 실수가 네 번"
+표(유니크·인덱스·타입·CHECK)를 더했다. 항목 수는 늘지 않아 건수 집계는 그대로고, 요약 표
+제목만 새 내용을 포괄하도록 넓혔다.
