@@ -58,7 +58,7 @@ chore/{슬러그}               F-ID 없는 인프라·기술 부채
 
 | | ID | 제목 | 브랜치 | 완료 기준 | 의존 | 차단 |
 |---|---|---|---|---|---|---|
-| [ ] | T-006 | `accounts` 스키마와 엔티티 | `feature/F-TEDWWF-schema` | 마이그레이션 적용, `PostgresMigrationTest` 통과. `bank_code`가 VARCHAR라 앞자리 0이 보존된다 | T-001 | — |
+| [x] | T-006 | `accounts` 스키마와 엔티티 | `feature/F-TEDWWF-schema` | ✅ 완료. QA PASS 11 / FIX 1 / REDO 0 | T-001 | #18 |
 | [ ] | T-007 | 금융 데이터 조회 동의 API | `feature/F-TEDWWF-consent` | 동의 없이 계좌 연결을 시작할 수 없다. 가입 시 동의와 분리 기록된다 | T-004, T-006 | — |
 | [ ] | T-008 | 코드에프 SDK 연동 골격 (SANDBOX) | `feature/F-TEDWWF-codef-client` | SANDBOX 자격증명으로 API 호출이 왕복한다. `EasyCodefUtil.encryptRSA()` 사용 경로 확인 | T-006 | — |
 | [ ] | T-009 | 계좌 연결 시작·2-way 추가인증 콜백 | `feature/F-TEDWWF-connect` | 인증 성공 시 코드에프가 반환한 계좌 목록 **전체가 배열로** 저장된다. 2-way 상태가 Upstash에 TTL로 저장된다 | T-008 | **B-CODEF**, **B-REDIS**. T-006에서 `accounts` 상태 전이 메서드(`EXPIRED`·`REVOKED`·재인증·집계 제외)와 `updated_at` 갱신 수단을 미결로 넘겼다. |
@@ -74,7 +74,7 @@ chore/{슬러그}               F-ID 없는 인프라·기술 부채
 
 | | ID | 제목 | 브랜치 | 완료 기준 | 의존 | 차단 |
 |---|---|---|---|---|---|---|
-| [ ] | T-013 | `categories`·`merchant_keyword_rules` 스키마와 시드 | `feature/F-OAVYWT-category-schema` | 카테고리 10개가 시드로 들어간다. `keywords`에 GIN 인덱스가 생성된다 | T-001 | — |
+| [x] | T-013 | `categories`·`merchant_keyword_rules` 스키마와 시드 | `feature/F-OAVYWT-category-schema` | ✅ 완료. QA PASS 12 / FIX 2 / REDO 0. 키워드 룰 시드는 목록이 확정되지 않아 T-019로 미뤘다 | T-001 | #19 |
 | [ ] | T-014 | `transactions`·`transfer_links`·`sync_attempts` 스키마와 엔티티 | `feature/F-OAVYWT-schema` | 마이그레이션 적용, 유니크·부분 인덱스 전부 생성 확인 | T-006, T-013 | — |
 | [ ] | T-015 | 코드에프 거래 조회 연동과 90일 페이지네이션 | `feature/F-OAVYWT-fetch` | 90일치가 페이지 단위 순차 호출로 전부 수집된다. 단일 호출로 안 채워지는 경우를 재현해 확인 | T-008, T-014 | **B-CODEF**. T-006에서 `accounts` 상태 전이 메서드(`EXPIRED`·`REVOKED`·재인증·집계 제외)와 `updated_at` 갱신 수단을 미결로 넘겼다. |
 | [ ] | T-016 | 중복 거래 판정과 저장 | `feature/F-OAVYWT-dedup` | 같은 거래를 두 번 수집해도 행이 늘지 않는다. 유니크 제약 위반이 정상 처리된다 | T-015 | — |
@@ -166,8 +166,8 @@ chore/{슬러그}               F-ID 없는 인프라·기술 부채
 | ~~2~~ | ~~T-001~~ | ~~`users`·`user_consents` 스키마와 엔티티~~ | ✅ 2026-09-18 완료 |
 | ~~2~~ | ~~T-052~~ | ~~기준 타임존 KST 런타임 강제~~ | ✅ 2026-09-18 완료 |
 | ~~3~~ | ~~T-023~~ | ~~`budget_periods`·`status_thresholds` 스키마~~ | ✅ 2026-09-20 완료 |
-| 4 | T-013 | `categories`·`merchant_keyword_rules` 스키마와 시드 | 카테고리 10개는 이미 확정됐다 |
-| 5 | T-006 | `accounts` 스키마와 엔티티 | 코드에프 연동 없이 스키마만 |
+| ~~4~~ | ~~T-013~~ | ~~`categories`·`merchant_keyword_rules` 스키마와 시드~~ | ✅ 2026-09-21 완료 |
+| ~~5~~ | ~~T-006~~ | ~~`accounts` 스키마와 엔티티~~ | ✅ 2026-09-21 완료 |
 | 6 | T-041 | 보상·상점 스키마와 시드 | 슬롯 4종도 확정됐다 |
 | 7 | T-051 | 운영 프로필 springdoc 정책 | 작은 결정 |
 
