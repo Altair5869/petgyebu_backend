@@ -30,8 +30,8 @@ import lombok.NoArgsConstructor;
  * {@code reward_grants}의 3열 유니크와 다르다는 점에 주의한다.
  *
  * <p>{@code readAt}은 발송 시점에 null이고 앱에서 알림을 탭할 때 채워진다. KPI "예산 초과 경고
- * 확인율"의 분자다(Q11). 열람 이벤트 수신 API와 실제 FCM 발송은 T-032 이후 범위라 여기에 아직
- * 없다.
+ * 확인율"의 분자다(Q11). 임계값 진입 감지와 FCM 발송은 T-035, 알림 열람 보고 API는 T-036
+ * 범위라 여기에 아직 없다.
  */
 @Entity
 @Table(name = "push_logs")

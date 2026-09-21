@@ -17,8 +17,11 @@ import com.petgyebu.telo.push.repository.PushLogRepository;
 import com.petgyebu.telo.user.domain.AuthProvider;
 import com.petgyebu.telo.user.domain.User;
 import com.petgyebu.telo.user.repository.UserRepository;
+import java.sql.Timestamp;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -178,12 +181,14 @@ class PushSchemaTest {
 		assertThat(row.get("platform"))
 				.as("platform이 문자열로 저장되지 않았다. @Enumerated(STRING)이 빠졌다")
 				.isEqualTo("IOS");
-		assertThat(row.get("created_at"))
-				.as("created_at이 비었다. DB DEFAULT가 아니라 엔티티가 값을 채워야 한다")
-				.isNotNull();
-		assertThat(row.get("updated_at"))
-				.as("updated_at이 비었다")
-				.isNotNull();
+		// isNotNull()로는 엔티티가 넘긴 시각을 어긋나게 담아도(now.plusYears(1) 같은) 통과한다.
+		// 넘긴 값과 맞춰 본다.
+		assertThat(instantOf(row.get("created_at")))
+				.as("created_at이 넘긴 시각과 다르다. DB DEFAULT가 발화했거나 값이 어긋나게 담겼다")
+				.isEqualTo(truncated(now));
+		assertThat(instantOf(row.get("updated_at")))
+				.as("updated_at이 넘긴 시각과 다르다. 생성 직후에는 created_at과 같아야 한다")
+				.isEqualTo(truncated(now));
 	}
 
 	// ---------------------------------------------------------------- push_logs
@@ -245,6 +250,31 @@ class PushSchemaTest {
 
 		assertThat(count("SELECT count(*) FROM push_logs WHERE user_id = ?", user.getId()))
 				.isEqualTo(2);
+	}
+
+	@Test
+	@DisplayName("같은 기간을 다른 user_id로 두 번 기록해도 거부된다 — 유니크에 user_id가 없다")
+	void sameThresholdWithDifferentUserIdIsRejected() {
+		// 유니크에 user_id를 더하는 변이(3열)를 동작으로 잡는 유일한 단언이다. 나머지 세
+		// 방향(재발송 거부 / 같은 기간 두 임계값 / 다음 달 재발송)은 2열과 3열에서 결과가
+		// 같아 3열 변이를 통과시킨다.
+		//
+		// push_logs에는 user_id와 budget_period_id의 일치를 강제하는 복합 FK도 CHECK도 없다.
+		// 두 FK가 각각 걸려 있을 뿐이라 "남의 기간에 내 user_id로 쓰는" 행은 DB 수준에서
+		// 만들어진다. 3열 유니크였다면 이 INSERT가 통과해, user_id만 달리한 중복 발송 기록이
+		// 같은 기간에 남는다 — R-ENPLNB 결정 6의 "기간당 1회"가 "사용자별 기간당 1회"로 바뀐다.
+		BudgetPeriod period = givenBudgetPeriod("push-uq-otheruser-1");
+		User otherUser = givenUser("push-uq-otheruser-2");
+		insertPushLog(period, "OVER_BUDGET");
+
+		assertThatThrownBy(() -> new JdbcTemplate(dataSource).update(
+				"INSERT INTO push_logs (user_id, budget_period_id, threshold_type, sent_at) "
+						+ "VALUES (?, ?, ?, now())",
+				otherUser.getId(), period.getId(), "OVER_BUDGET"))
+				.as("user_id만 다른 중복 기록이 저장됐다. 유니크에 user_id가 들어가 있다")
+				.isInstanceOf(DataIntegrityViolationException.class)
+				.rootCause()
+				.hasMessageContaining("uq_push_logs_period_threshold");
 	}
 
 	@Test
@@ -331,9 +361,11 @@ class PushSchemaTest {
 		assertThat(row.get("threshold_type"))
 				.as("threshold_type이 문자열로 저장되지 않았다. @Enumerated(STRING)이 빠졌다")
 				.isEqualTo("OVER_BUDGET");
-		assertThat(row.get("sent_at"))
-				.as("sent_at이 비었다. DB DEFAULT가 없어 엔티티가 반드시 채워야 한다")
-				.isNotNull();
+		// isNotNull()로는 생성자가 sentAt을 어긋나게 담아도(plusDays(1) 같은) 통과한다.
+		// 발송 시각은 "기간당 1회" 판정과 KPI 집계가 그대로 읽는 값이라 넘긴 값과 맞춰 본다.
+		assertThat(instantOf(row.get("sent_at")))
+				.as("sent_at이 넘긴 시각과 다르다. 생성자가 값을 어긋나게 담았다")
+				.isEqualTo(truncated(sentAt));
 		assertThat(row.get("read_at"))
 				.as("발송 직후인데 read_at이 채워져 있다. 확인율 KPI가 항상 100%%가 된다")
 				.isNull();
@@ -465,6 +497,29 @@ class PushSchemaTest {
 		assertThat(definitions.get(0))
 				.as("인덱스 %s의 종류·열 구성·정렬 방향·부분 조건 중 하나가 설계와 다르다", indexName)
 				.endsWith(expectedTail);
+	}
+
+	/**
+	 * {@code TIMESTAMPTZ}를 드라이버가 {@link Timestamp}로 줄 수도 {@link OffsetDateTime}으로
+	 * 줄 수도 있어 절대 시각으로 맞춘다.
+	 */
+	private static Instant instantOf(Object value) {
+		if (value instanceof OffsetDateTime offsetDateTime) {
+			return truncate(offsetDateTime.toInstant());
+		}
+		return truncate(((Timestamp) value).toInstant());
+	}
+
+	/**
+	 * 밀리초로 자른다. JDK 시계와 PostgreSQL의 저장 정밀도가 달라(나노 대 마이크로) 그대로
+	 * 비교하면 값이 맞아도 어긋난다. 검출하려는 것은 날·해 단위로 밀린 시각이라 이 정도면 된다.
+	 */
+	private static Instant truncated(OffsetDateTime value) {
+		return truncate(value.toInstant());
+	}
+
+	private static Instant truncate(Instant value) {
+		return value.truncatedTo(ChronoUnit.MILLIS);
 	}
 
 	private void insertDeviceToken(User user, String fcmToken, String platform) {

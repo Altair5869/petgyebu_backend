@@ -5,7 +5,7 @@ CREATE TABLE push_device_tokens (
     id         BIGINT       GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     user_id    BIGINT       NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     -- UNIQUE는 기기를 넘겨받은 경우(같은 토큰이 다른 사용자에게)를 충돌로 감지하기 위한 것이다.
-    -- 등록 시 upsert로 소유자를 갱신하며, 그 upsert 로직은 T-032 이후 몫이다.
+    -- 등록 시 upsert로 소유자를 갱신하며, 그 upsert 로직은 T-034(디바이스 토큰 등록·해제 API) 몫이다.
     fcm_token  VARCHAR(512) NOT NULL,
     -- 웹 푸시를 구현하지 않기로 해서 WEB이 없다(Q9, docs/02-requirements-features.md R-ENPLNB 결정 5).
     platform   VARCHAR(10)  NOT NULL,

@@ -25,7 +25,7 @@ import lombok.NoArgsConstructor;
  * {@code fcm_token}에는 UNIQUE가 걸려 있어 <b>같은 토큰이 두 사용자에게 붙을 수 없다.</b>
  * 기기를 넘겨받은 경우를 충돌로 감지하기 위한 것이며, 등록 시 upsert로 소유자를 갱신한다.
  *
- * <p>토큰 등록 API와 upsert, 실제 FCM 발송은 T-032 이후 범위라 여기에 아직 없다.
+ * <p>토큰 등록·해제 API와 upsert는 T-034, 실제 FCM 발송은 T-035 범위라 여기에 아직 없다.
  */
 @Entity
 @Table(name = "push_device_tokens")
