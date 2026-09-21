@@ -3,6 +3,7 @@ package com.petgyebu.telo.account;
 import static java.util.Map.entry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 
 import com.petgyebu.telo.account.domain.Account;
 import com.petgyebu.telo.account.domain.ConsentStatus;
@@ -210,13 +211,59 @@ class AccountSchemaTest {
 	}
 
 	@Test
-	@DisplayName("설계한 인덱스가 실제로 만들어져 있다 — 이름과 대상 열 구성까지")
+	@DisplayName("명세에 있는 열거형 값은 전부 저장된다 — CHECK가 과도하게 좁지 않다")
+	void definedEnumValuesAreAccepted() {
+		// 거부 케이스만 보면 CHECK 목록에서 값을 하나 빼도 통과한다. consent_status에서
+		// 'REVOKED'가 사라지면 사용자가 계좌 연결을 해제한 상태를 저장할 수 없고,
+		// display_mode에서 'HIDDEN'이 사라지면 제외 계좌 숨김이 통째로 막힌다.
+		User user = givenUser("account-enum-1");
+		JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+
+		String[] consentStatuses = {"ACTIVE", "EXPIRED", "REVOKED"};
+		String[] displayModes = {"BADGE", "HIDDEN", "BADGE"};
+		for (int i = 0; i < consentStatuses.length; i++) {
+			jdbc.update("INSERT INTO accounts (user_id, bank_code, codef_connected_id, "
+					+ "masked_account_no, consent_status, display_mode) VALUES (?, ?, ?, ?, ?, ?)",
+					user.getId(), BANK_CODE_WITH_LEADING_ZERO, "connected-id-enum-" + i,
+					"110-****-000" + i, consentStatuses[i], displayModes[i]);
+		}
+
+		assertThat(new JdbcTemplate(dataSource).queryForList(
+				"SELECT consent_status, display_mode FROM accounts WHERE user_id = ? "
+						+ "ORDER BY masked_account_no",
+				user.getId()))
+				.as("명세에 있는 consent_status·display_mode 값이 전부 저장되지 않았다")
+				.extracting("consent_status", "display_mode")
+				.containsExactly(
+						tuple("ACTIVE", "BADGE"),
+						tuple("EXPIRED", "HIDDEN"),
+						tuple("REVOKED", "BADGE"));
+	}
+
+	@Test
+	@DisplayName("컬럼 타입이 설계와 일치한다 — udt_name과 VARCHAR 길이까지")
+	void columnTypesMatchDesign() {
+		// VARCHAR는 길이까지 본다. udt_name은 VARCHAR(10)이든 VARCHAR(255)든 'varchar'라
+		// 길이 변이(마스킹 번호나 커넥티드아이디가 잘려 들어오는 스키마)를 못 잡는다.
+		assertColumnType("accounts", "bank_code", "varchar", 10);
+		assertColumnType("accounts", "codef_connected_id", "varchar", 255);
+		assertColumnType("accounts", "masked_account_no", "varchar", 50);
+		assertColumnType("accounts", "account_name", "varchar", 100);
+		assertColumnType("accounts", "consent_status", "varchar", 20);
+		assertColumnType("accounts", "display_mode", "varchar", 10);
+		assertColumnType("accounts", "reauth_required", "bool", null);
+		assertColumnType("accounts", "included_in_budget", "bool", null);
+		assertColumnType("accounts", "consent_expires_at", "timestamptz", null);
+	}
+
+	@Test
+	@DisplayName("설계한 인덱스가 실제로 만들어져 있다 — 종류·열 구성·정렬 방향·부분 조건까지")
 	void designedIndexesExist() {
 		// 계좌 목록 조회용.
-		assertIndex("accounts", "ix_accounts_user_id", "user_id");
+		assertIndex("accounts", "ix_accounts_user_id", "btree", "user_id", null);
 		// 스케줄러가 동기화 대상 계좌를 고를 때.
-		assertIndex("accounts", "ix_accounts_consent_status_last_synced_at",
-				"consent_status, last_synced_at");
+		assertIndex("accounts", "ix_accounts_consent_status_last_synced_at", "btree",
+				"consent_status, last_synced_at", null);
 	}
 
 	@Test
@@ -280,9 +327,18 @@ class AccountSchemaTest {
 	 * <p>이름만 보지 않고 {@code indexdef}의 대상 열 구성까지 본다. 이름을 유지한 채 열만
 	 * 바꾸는 변이는 이름 단언을 통과하기 때문이다.
 	 *
+	 * <p>종류({@code USING btree})와 부분 조건({@code WHERE ...})까지 본다. 열 목록만 보면
+	 * 인덱스 종류가 바뀌는 변이(T-013)와 조건이 붙거나 빠지는 변이(T-014)를 통과시킨다.
+	 * 세 스키마 테스트가 제각각 갖고 있던 헬퍼를 가장 넓은 것으로 통일했다.
+	 *
+	 * @param method {@code USING} 뒤에 나와야 하는 인덱스 종류(소문자)
 	 * @param expectedColumns {@code indexdef} 괄호 안에 그대로 나타나야 하는 열 목록
+	 * @param expectedPredicate 부분 인덱스의 조건. PostgreSQL이 정규화한 모양 그대로 적는다.
+	 *     부분 인덱스가 아니면 null이며, 이때 {@code WHERE} 절이 붙어 있으면 실패한다
 	 */
-	private void assertIndex(String tableName, String indexName, String expectedColumns) {
+	private void assertIndex(
+			String tableName, String indexName, String method, String expectedColumns,
+			String expectedPredicate) {
 		List<String> definitions = new JdbcTemplate(dataSource).queryForList(
 				"SELECT indexdef FROM pg_indexes "
 						+ "WHERE schemaname = 'public' AND tablename = ? AND indexname = ?",
@@ -291,9 +347,39 @@ class AccountSchemaTest {
 		assertThat(definitions)
 				.as("%s 테이블에 인덱스 %s가 없다", tableName, indexName)
 				.hasSize(1);
+
+		String expectedTail = "USING " + method + " (" + expectedColumns + ")"
+				+ (expectedPredicate == null ? "" : " WHERE " + expectedPredicate);
 		assertThat(definitions.get(0))
-				.as("인덱스 %s의 대상 열 구성이 설계와 다르다", indexName)
-				.endsWith("(" + expectedColumns + ")");
+				.as("인덱스 %s의 종류·열 구성·정렬 방향·부분 조건 중 하나가 설계와 다르다", indexName)
+				.endsWith(expectedTail);
+	}
+
+	/**
+	 * 컬럼의 실제 타입을 못 박는다. VARCHAR는 길이까지 본다.
+	 *
+	 * <p>{@code data_type}이 아니라 {@code udt_name}을 본다. {@code SMALLINT}와
+	 * {@code INTEGER}는 Hibernate validate도 PostgreSQL의 FK 비교도 구분하지 않아 바뀌어도
+	 * 아무도 잡지 못한다(T-013). {@code udt_name}만으로는 길이가 다른 VARCHAR가 전부
+	 * {@code varchar}로 보여 길이 변이가 새어 나가므로 {@code character_maximum_length}를
+	 * 함께 본다(T-014).
+	 *
+	 * @param expectedLength VARCHAR의 길이. 문자열 타입이 아니면 null을 준다. null을 기대하면
+	 *     숫자·시각 컬럼이 문자열로 바뀌는 변이도 함께 걸린다
+	 */
+	private void assertColumnType(
+			String tableName, String columnName, String expectedUdtName, Integer expectedLength) {
+		Map<String, Object> column = new JdbcTemplate(dataSource).queryForMap(
+				"SELECT udt_name, character_maximum_length FROM information_schema.columns "
+						+ "WHERE table_schema = 'public' AND table_name = ? AND column_name = ?",
+				tableName, columnName);
+
+		assertThat(column.get("udt_name"))
+				.as("%s.%s의 타입이 설계와 다르다", tableName, columnName)
+				.isEqualTo(expectedUdtName);
+		assertThat(column.get("character_maximum_length"))
+				.as("%s.%s의 길이가 설계와 다르다", tableName, columnName)
+				.isEqualTo(expectedLength);
 	}
 
 	private User givenUser(String providerUserId) {

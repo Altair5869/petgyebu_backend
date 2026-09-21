@@ -196,12 +196,73 @@ class BudgetSchemaTest {
 	}
 
 	@Test
-	@DisplayName("설계한 인덱스가 실제로 만들어져 있다 — 이름과 대상 열 구성까지")
+	@DisplayName("명세에 있는 열거형 값은 전부 저장된다 — CHECK가 과도하게 좁지 않다")
+	void definedEnumValuesAreAccepted() {
+		// 거부 케이스만 보면 CHECK 목록에서 값을 하나 빼도 통과한다. status에서 'CLOSED'가
+		// 사라지면 s9 배치가 기간을 종료할 수 없고, status_code에서 한 종류가 빠지면 그 상태
+		// 구간을 저장할 수 없다(6단계 전부 존재가 F-FZUVLV의 전제다).
+		User user = givenUser("budget-enum-1");
+		JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+
+		jdbc.update("INSERT INTO budget_periods (user_id, period_start, period_end, "
+				+ "target_amount, target_amount_snapshot, status) VALUES (?, ?, ?, ?, ?, ?)",
+				user.getId(), SEPTEMBER_START, SEPTEMBER_END, 300_000L, 300_000L, "ACTIVE");
+		jdbc.update("INSERT INTO budget_periods (user_id, period_start, period_end, "
+				+ "target_amount, target_amount_snapshot, status) VALUES (?, ?, ?, ?, ?, ?)",
+				user.getId(), OCTOBER_START, OCTOBER_END, 300_000L, 300_000L, "CLOSED");
+
+		assertThat(jdbc.queryForList(
+				"SELECT status FROM budget_periods WHERE user_id = ? ORDER BY period_start",
+				String.class, user.getId()))
+				.as("명세에 있는 status가 전부 저장되지 않았다")
+				.containsExactly("ACTIVE", "CLOSED");
+
+		Long periodId = jdbc.queryForObject(
+				"SELECT id FROM budget_periods WHERE user_id = ? AND status = 'ACTIVE'",
+				Long.class, user.getId());
+		List<String> statusCodes = List.of(
+				"REST", "WAKE", "INTEREST", "ANXIOUS", "STRONG_WARNING", "OVER_BUDGET");
+		short sortOrder = 1;
+		for (String statusCode : statusCodes) {
+			// start_rate 0.00은 CHECK (start_rate >= 0)의 경계 허용 케이스이기도 하다.
+			jdbc.update("INSERT INTO status_thresholds (budget_period_id, status_code, "
+					+ "start_rate, end_rate, sort_order) VALUES (?, ?, ?, ?, ?)",
+					periodId, statusCode, new BigDecimal("0.00"), new BigDecimal("40.00"), sortOrder++);
+		}
+
+		assertThat(jdbc.queryForList(
+				"SELECT status_code FROM status_thresholds WHERE budget_period_id = ? "
+						+ "ORDER BY sort_order",
+				String.class, periodId))
+				.as("명세에 있는 status_code 6종이 전부 저장되지 않았다")
+				.containsExactlyElementsOf(statusCodes);
+	}
+
+	@Test
+	@DisplayName("컬럼 타입이 설계와 일치한다 — udt_name과 VARCHAR 길이까지")
+	void columnTypesMatchDesign() {
+		// VARCHAR는 길이까지 본다. udt_name은 길이가 달라도 'varchar'라 길이 변이를 못 잡는다.
+		assertColumnType("budget_periods", "status", "varchar", 10);
+		assertColumnType("budget_periods", "target_amount", "int8", null);
+		assertColumnType("budget_periods", "target_amount_snapshot", "int8", null);
+		assertColumnType("budget_periods", "period_start", "date", null);
+
+		assertColumnType("status_thresholds", "status_code", "varchar", 20);
+		// 비율은 NUMERIC(5,2)다. 실수형으로 바뀌면 경계값 판정이 흔들린다.
+		assertColumnType("status_thresholds", "start_rate", "numeric", null);
+		assertColumnType("status_thresholds", "end_rate", "numeric", null);
+		assertColumnType("status_thresholds", "sort_order", "int2", null);
+	}
+
+	@Test
+	@DisplayName("설계한 인덱스가 실제로 만들어져 있다 — 종류·열 구성·정렬 방향·부분 조건까지")
 	void designedIndexesExist() {
 		// 활성 예산 조회용.
-		assertIndex("budget_periods", "ix_budget_periods_user_id_status", "user_id, status");
+		assertIndex("budget_periods", "ix_budget_periods_user_id_status", "btree",
+				"user_id, status", null);
 		// s9 배치가 종료된 기간을 찾을 때.
-		assertIndex("budget_periods", "ix_budget_periods_status_period_end", "status, period_end");
+		assertIndex("budget_periods", "ix_budget_periods_status_period_end", "btree",
+				"status, period_end", null);
 	}
 
 	@Test
@@ -269,9 +330,18 @@ class BudgetSchemaTest {
 	 * <p>이름만 보지 않고 {@code indexdef}의 대상 열 구성까지 본다. 이름을 유지한 채 열만
 	 * 바꾸는 변이는 이름 단언을 통과하기 때문이다.
 	 *
+	 * <p>종류({@code USING btree})와 부분 조건({@code WHERE ...})까지 본다. 열 목록만 보면
+	 * 인덱스 종류가 바뀌는 변이(T-013)와 조건이 붙거나 빠지는 변이(T-014)를 통과시킨다.
+	 * 세 스키마 테스트가 제각각 갖고 있던 헬퍼를 가장 넓은 것으로 통일했다.
+	 *
+	 * @param method {@code USING} 뒤에 나와야 하는 인덱스 종류(소문자)
 	 * @param expectedColumns {@code indexdef} 괄호 안에 그대로 나타나야 하는 열 목록
+	 * @param expectedPredicate 부분 인덱스의 조건. PostgreSQL이 정규화한 모양 그대로 적는다.
+	 *     부분 인덱스가 아니면 null이며, 이때 {@code WHERE} 절이 붙어 있으면 실패한다
 	 */
-	private void assertIndex(String tableName, String indexName, String expectedColumns) {
+	private void assertIndex(
+			String tableName, String indexName, String method, String expectedColumns,
+			String expectedPredicate) {
 		List<String> definitions = new JdbcTemplate(dataSource).queryForList(
 				"SELECT indexdef FROM pg_indexes "
 						+ "WHERE schemaname = 'public' AND tablename = ? AND indexname = ?",
@@ -280,9 +350,39 @@ class BudgetSchemaTest {
 		assertThat(definitions)
 				.as("%s 테이블에 인덱스 %s가 없다", tableName, indexName)
 				.hasSize(1);
+
+		String expectedTail = "USING " + method + " (" + expectedColumns + ")"
+				+ (expectedPredicate == null ? "" : " WHERE " + expectedPredicate);
 		assertThat(definitions.get(0))
-				.as("인덱스 %s의 대상 열 구성이 설계와 다르다", indexName)
-				.endsWith("(" + expectedColumns + ")");
+				.as("인덱스 %s의 종류·열 구성·정렬 방향·부분 조건 중 하나가 설계와 다르다", indexName)
+				.endsWith(expectedTail);
+	}
+
+	/**
+	 * 컬럼의 실제 타입을 못 박는다. VARCHAR는 길이까지 본다.
+	 *
+	 * <p>{@code data_type}이 아니라 {@code udt_name}을 본다. {@code SMALLINT}와
+	 * {@code INTEGER}는 Hibernate validate도 PostgreSQL의 FK 비교도 구분하지 않아 바뀌어도
+	 * 아무도 잡지 못한다(T-013). {@code udt_name}만으로는 길이가 다른 VARCHAR가 전부
+	 * {@code varchar}로 보여 길이 변이가 새어 나가므로 {@code character_maximum_length}를
+	 * 함께 본다(T-014).
+	 *
+	 * @param expectedLength VARCHAR의 길이. 문자열 타입이 아니면 null을 준다. null을 기대하면
+	 *     숫자·시각 컬럼이 문자열로 바뀌는 변이도 함께 걸린다
+	 */
+	private void assertColumnType(
+			String tableName, String columnName, String expectedUdtName, Integer expectedLength) {
+		Map<String, Object> column = new JdbcTemplate(dataSource).queryForMap(
+				"SELECT udt_name, character_maximum_length FROM information_schema.columns "
+						+ "WHERE table_schema = 'public' AND table_name = ? AND column_name = ?",
+				tableName, columnName);
+
+		assertThat(column.get("udt_name"))
+				.as("%s.%s의 타입이 설계와 다르다", tableName, columnName)
+				.isEqualTo(expectedUdtName);
+		assertThat(column.get("character_maximum_length"))
+				.as("%s.%s의 길이가 설계와 다르다", tableName, columnName)
+				.isEqualTo(expectedLength);
 	}
 
 	private User givenUser(String providerUserId) {

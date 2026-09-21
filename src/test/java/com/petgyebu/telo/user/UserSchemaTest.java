@@ -3,6 +3,7 @@ package com.petgyebu.telo.user;
 import static java.util.Map.entry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 
 import com.petgyebu.telo.user.domain.AuthProvider;
 import com.petgyebu.telo.user.domain.ConsentType;
@@ -109,13 +110,72 @@ class UserSchemaTest {
 	}
 
 	@Test
-	@DisplayName("설계한 인덱스가 실제로 만들어져 있다 — 이름과 대상 열 구성까지")
+	@DisplayName("명세에 있는 열거형 값은 전부 저장된다 — CHECK가 과도하게 좁지 않다")
+	void definedEnumValuesAreAccepted() {
+		// 거부 케이스만 보면 CHECK 목록에서 값을 하나 빼도 통과한다. provider에서 'APPLE'이
+		// 사라지면 애플 로그인이 통째로 막히는데 아무도 모른다.
+		JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+
+		// provider 2종. character_type은 둘 다와 null(선택 전)까지 본다.
+		jdbc.update("INSERT INTO users (provider, provider_user_id, character_type) "
+				+ "VALUES (?, ?, ?)", "KAKAO", "enum-kakao-dog", "DOG");
+		jdbc.update("INSERT INTO users (provider, provider_user_id, character_type) "
+				+ "VALUES (?, ?, ?)", "APPLE", "enum-apple-cat", "CAT");
+		jdbc.update("INSERT INTO users (provider, provider_user_id, character_type) "
+				+ "VALUES (?, ?, ?)", "APPLE", "enum-apple-none", null);
+
+		assertThat(jdbc.queryForList(
+				"SELECT provider, character_type FROM users WHERE provider_user_id LIKE 'enum-%' "
+						+ "ORDER BY provider_user_id"))
+				.as("명세에 있는 provider·character_type 조합이 저장되지 않았다")
+				.extracting("provider", "character_type")
+				.containsExactly(
+						tuple("APPLE", "CAT"),
+						tuple("APPLE", null),
+						tuple("KAKAO", "DOG"));
+
+		// 동의 종류 4종. 하나라도 빠지면 그 동의를 받을 수 없는 스키마가 된다.
+		Long userId = jdbc.queryForObject(
+				"SELECT id FROM users WHERE provider_user_id = ?", Long.class, "enum-kakao-dog");
+		for (String consentType : List.of(
+				"TERMS_OF_SERVICE", "PRIVACY_POLICY", "CODEF_THIRD_PARTY", "FINANCIAL_DATA_INQUIRY")) {
+			jdbc.update("INSERT INTO user_consents (user_id, consent_type, consent_version, "
+					+ "consented_at) VALUES (?, ?, ?, now())", userId, consentType, "v1.0");
+		}
+
+		assertThat(jdbc.queryForList(
+				"SELECT consent_type FROM user_consents WHERE user_id = ? ORDER BY consent_type",
+				String.class, userId))
+				.as("명세에 있는 consent_type이 전부 저장되지 않았다")
+				.containsExactly("CODEF_THIRD_PARTY", "FINANCIAL_DATA_INQUIRY",
+						"PRIVACY_POLICY", "TERMS_OF_SERVICE");
+	}
+
+	@Test
+	@DisplayName("컬럼 타입이 설계와 일치한다 — udt_name과 VARCHAR 길이까지")
+	void columnTypesMatchDesign() {
+		// VARCHAR는 길이까지 본다. udt_name은 VARCHAR(10)이든 VARCHAR(320)이든 'varchar'라
+		// 길이를 줄이는 변이(애플 이메일이 잘려 들어오는 스키마)를 udt_name만으로는 못 잡는다.
+		assertColumnType("users", "provider", "varchar", 10);
+		assertColumnType("users", "provider_user_id", "varchar", 255);
+		assertColumnType("users", "email", "varchar", 320);
+		assertColumnType("users", "character_type", "varchar", 10);
+		assertColumnType("users", "joined_at", "timestamptz", null);
+		assertColumnType("users", "id", "int8", null);
+
+		assertColumnType("user_consents", "consent_type", "varchar", 30);
+		assertColumnType("user_consents", "consent_version", "varchar", 20);
+		assertColumnType("user_consents", "consented_at", "timestamptz", null);
+	}
+
+	@Test
+	@DisplayName("설계한 인덱스가 실제로 만들어져 있다 — 종류·열 구성·정렬 방향·부분 조건까지")
 	void designedIndexesExist() {
 		// 가입 후 24시간·7일 코호트 집계용.
-		assertIndex("users", "ix_users_joined_at", "joined_at");
+		assertIndex("users", "ix_users_joined_at", "btree", "joined_at", null);
 		// 최신 동의 버전 조회용. 정렬 방향까지 설계의 일부다.
-		assertIndex("user_consents", "ix_user_consents_user_id_type_consented_at",
-				"user_id, consent_type, consented_at DESC");
+		assertIndex("user_consents", "ix_user_consents_user_id_type_consented_at", "btree",
+				"user_id, consent_type, consented_at DESC", null);
 	}
 
 	@Test
@@ -180,9 +240,18 @@ class UserSchemaTest {
 	 * <p>이름만 보지 않고 {@code indexdef}의 대상 열 구성까지 본다. 이름을 유지한 채 열만
 	 * 바꾸는 변이는 이름 단언을 통과하기 때문이다.
 	 *
+	 * <p>종류({@code USING btree})와 부분 조건({@code WHERE ...})까지 본다. 열 목록만 보면
+	 * 인덱스 종류가 바뀌는 변이(T-013)와 조건이 붙거나 빠지는 변이(T-014)를 통과시킨다.
+	 * 세 스키마 테스트가 제각각 갖고 있던 헬퍼를 가장 넓은 것으로 통일했다.
+	 *
+	 * @param method {@code USING} 뒤에 나와야 하는 인덱스 종류(소문자)
 	 * @param expectedColumns {@code indexdef} 괄호 안에 그대로 나타나야 하는 열 목록
+	 * @param expectedPredicate 부분 인덱스의 조건. PostgreSQL이 정규화한 모양 그대로 적는다.
+	 *     부분 인덱스가 아니면 null이며, 이때 {@code WHERE} 절이 붙어 있으면 실패한다
 	 */
-	private void assertIndex(String tableName, String indexName, String expectedColumns) {
+	private void assertIndex(
+			String tableName, String indexName, String method, String expectedColumns,
+			String expectedPredicate) {
 		List<String> definitions = new JdbcTemplate(dataSource).queryForList(
 				"SELECT indexdef FROM pg_indexes "
 						+ "WHERE schemaname = 'public' AND tablename = ? AND indexname = ?",
@@ -191,9 +260,39 @@ class UserSchemaTest {
 		assertThat(definitions)
 				.as("%s 테이블에 인덱스 %s가 없다", tableName, indexName)
 				.hasSize(1);
+
+		String expectedTail = "USING " + method + " (" + expectedColumns + ")"
+				+ (expectedPredicate == null ? "" : " WHERE " + expectedPredicate);
 		assertThat(definitions.get(0))
-				.as("인덱스 %s의 대상 열 구성이 설계와 다르다", indexName)
-				.endsWith("(" + expectedColumns + ")");
+				.as("인덱스 %s의 종류·열 구성·정렬 방향·부분 조건 중 하나가 설계와 다르다", indexName)
+				.endsWith(expectedTail);
+	}
+
+	/**
+	 * 컬럼의 실제 타입을 못 박는다. VARCHAR는 길이까지 본다.
+	 *
+	 * <p>{@code data_type}이 아니라 {@code udt_name}을 본다. {@code SMALLINT}와
+	 * {@code INTEGER}는 Hibernate validate도 PostgreSQL의 FK 비교도 구분하지 않아 바뀌어도
+	 * 아무도 잡지 못한다(T-013). {@code udt_name}만으로는 {@code VARCHAR(10)}과
+	 * {@code VARCHAR(320)}이 둘 다 {@code varchar}라 길이 변이가 새어 나가므로
+	 * {@code character_maximum_length}를 함께 본다(T-014).
+	 *
+	 * @param expectedLength VARCHAR의 길이. 문자열 타입이 아니면 null을 준다. null을 기대하면
+	 *     숫자·시각 컬럼이 문자열로 바뀌는 변이도 함께 걸린다
+	 */
+	private void assertColumnType(
+			String tableName, String columnName, String expectedUdtName, Integer expectedLength) {
+		Map<String, Object> column = new JdbcTemplate(dataSource).queryForMap(
+				"SELECT udt_name, character_maximum_length FROM information_schema.columns "
+						+ "WHERE table_schema = 'public' AND table_name = ? AND column_name = ?",
+				tableName, columnName);
+
+		assertThat(column.get("udt_name"))
+				.as("%s.%s의 타입이 설계와 다르다", tableName, columnName)
+				.isEqualTo(expectedUdtName);
+		assertThat(column.get("character_maximum_length"))
+				.as("%s.%s의 길이가 설계와 다르다", tableName, columnName)
+				.isEqualTo(expectedLength);
 	}
 
 	private int countConsents(JdbcTemplate jdbc, Long userId) {

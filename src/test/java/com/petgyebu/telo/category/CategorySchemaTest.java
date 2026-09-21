@@ -164,7 +164,7 @@ class CategorySchemaTest {
 		// 종류를 보지 않으면 B-tree로 바뀌어도 통과한다. 이름과 열은 그대로이기 때문이다.
 		// B-tree로는 JSONB 포함 연산(@>)을 태울 수 없어 T-019 자동 분류가 전수 스캔이 된다.
 		assertIndex("merchant_keyword_rules", "ix_merchant_keyword_rules_keywords",
-				"gin", "keywords");
+				"gin", "keywords", null);
 	}
 
 	@Test
@@ -228,6 +228,21 @@ class CategorySchemaTest {
 	}
 
 	@Test
+	@DisplayName("컬럼 타입이 설계와 일치한다 — udt_name과 VARCHAR 길이까지")
+	void columnTypesMatchDesign() {
+		// 이 테이블에는 CHECK가 없어 허용 케이스 축은 해당 사항이 없다. 대신 시드 값이
+		// 전부 고정이라 길이가 줄면 시드 INSERT부터 깨지는데, 길이를 늘리는 변이는 조용하다.
+		assertColumnType("categories", "code", "varchar", 30);
+		assertColumnType("categories", "name", "varchar", 30);
+		assertColumnType("categories", "id", "int2", null);
+		assertColumnType("categories", "sort_order", "int2", null);
+
+		assertColumnType("merchant_keyword_rules", "keywords", "jsonb", null);
+		assertColumnType("merchant_keyword_rules", "priority", "int2", null);
+		assertColumnType("merchant_keyword_rules", "category_id", "int2", null);
+	}
+
+	@Test
 	@DisplayName("NOT NULL 구성이 설계와 정확히 일치한다 — 빠진 것도 더 붙은 것도 없다")
 	void nullabilityMatchesDesign() {
 		assertNullability("categories", Map.ofEntries(
@@ -281,11 +296,16 @@ class CategorySchemaTest {
 	 * GIN을 B-tree로 바꿔도 인덱스 이름과 대상 열은 그대로라, 열 목록만 보는 단언은 그 변이를
 	 * 통과시킨다. {@code indexdef}의 {@code USING gin (keywords)} 부분을 통째로 맞춰본다.
 	 *
+	 * <p>부분 조건({@code WHERE ...})까지 보도록 T-014의 헬퍼로 통일했다. 조건 인자가 null이면
+	 * {@code WHERE} 절이 <b>없는</b> 것까지 단언하므로, 조건이 새로 붙는 변이도 걸린다.
+	 *
 	 * @param method {@code indexdef}의 {@code USING} 뒤에 나와야 하는 인덱스 종류(소문자)
 	 * @param expectedColumns {@code indexdef} 괄호 안에 그대로 나타나야 하는 열 목록
+	 * @param expectedPredicate 부분 인덱스의 조건. 부분 인덱스가 아니면 null
 	 */
 	private void assertIndex(
-			String tableName, String indexName, String method, String expectedColumns) {
+			String tableName, String indexName, String method, String expectedColumns,
+			String expectedPredicate) {
 		List<String> definitions = new JdbcTemplate(dataSource).queryForList(
 				"SELECT indexdef FROM pg_indexes "
 						+ "WHERE schemaname = 'public' AND tablename = ? AND indexname = ?",
@@ -294,9 +314,34 @@ class CategorySchemaTest {
 		assertThat(definitions)
 				.as("%s 테이블에 인덱스 %s가 없다", tableName, indexName)
 				.hasSize(1);
+
+		String expectedTail = "USING " + method + " (" + expectedColumns + ")"
+				+ (expectedPredicate == null ? "" : " WHERE " + expectedPredicate);
 		assertThat(definitions.get(0))
-				.as("인덱스 %s의 종류나 대상 열 구성이 설계와 다르다", indexName)
-				.endsWith("USING " + method + " (" + expectedColumns + ")");
+				.as("인덱스 %s의 종류·열 구성·부분 조건 중 하나가 설계와 다르다", indexName)
+				.endsWith(expectedTail);
+	}
+
+	/**
+	 * 컬럼의 실제 타입을 못 박는다. VARCHAR는 길이까지 본다.
+	 *
+	 * <p>{@code udt_name}만으로는 {@code VARCHAR(30)}과 {@code VARCHAR(255)}가 둘 다
+	 * {@code varchar}라 길이 변이가 새어 나간다(T-014). 문자열이 아닌 타입은 null을 기대해
+	 * 숫자 컬럼이 문자열로 바뀌는 변이도 함께 잡는다.
+	 */
+	private void assertColumnType(
+			String tableName, String columnName, String expectedUdtName, Integer expectedLength) {
+		Map<String, Object> column = new JdbcTemplate(dataSource).queryForMap(
+				"SELECT udt_name, character_maximum_length FROM information_schema.columns "
+						+ "WHERE table_schema = 'public' AND table_name = ? AND column_name = ?",
+				tableName, columnName);
+
+		assertThat(column.get("udt_name"))
+				.as("%s.%s의 타입이 설계와 다르다", tableName, columnName)
+				.isEqualTo(expectedUdtName);
+		assertThat(column.get("character_maximum_length"))
+				.as("%s.%s의 길이가 설계와 다르다", tableName, columnName)
+				.isEqualTo(expectedLength);
 	}
 
 	private Category category(short id, String code) {

@@ -197,10 +197,10 @@ class SyncAttemptSchemaTest {
 	void designedIndexesExist() {
 		// 계좌별 최근 시도 조회. DESC가 빠지면 indexdef에서 토큰이 사라져 여기서 깨진다.
 		assertIndex("sync_attempts", "ix_sync_attempts_account_attempted_at", "btree",
-				"account_id, attempted_at DESC");
+				"account_id, attempted_at DESC", null);
 		// 수집 성공률 95% 지표 집계용.
 		assertIndex("sync_attempts", "ix_sync_attempts_trigger_type_attempted_at", "btree",
-				"trigger_type, attempted_at");
+				"trigger_type, attempted_at", null);
 	}
 
 	@Test
@@ -273,10 +273,11 @@ class SyncAttemptSchemaTest {
 
 	/**
 	 * 인덱스가 설계대로 존재하는지 본다. 종류와 정렬 방향까지 본다
-	 * ({@code TransactionSchemaTest.assertIndex}와 같은 취지. 여기에는 부분 인덱스가 없다).
+	 * ({@code TransactionSchemaTest.assertIndex}와 같은 취지. 여기에는 부분 인덱스가 없어 조건 인자는 늘 null이다).
 	 */
 	private void assertIndex(
-			String tableName, String indexName, String method, String expectedColumns) {
+			String tableName, String indexName, String method, String expectedColumns,
+			String expectedPredicate) {
 		List<String> definitions = new JdbcTemplate(dataSource).queryForList(
 				"SELECT indexdef FROM pg_indexes "
 						+ "WHERE schemaname = 'public' AND tablename = ? AND indexname = ?",
@@ -285,9 +286,12 @@ class SyncAttemptSchemaTest {
 		assertThat(definitions)
 				.as("%s 테이블에 인덱스 %s가 없다", tableName, indexName)
 				.hasSize(1);
+
+		String expectedTail = "USING " + method + " (" + expectedColumns + ")"
+				+ (expectedPredicate == null ? "" : " WHERE " + expectedPredicate);
 		assertThat(definitions.get(0))
-				.as("인덱스 %s의 종류·열 구성·정렬 방향 중 하나가 설계와 다르다", indexName)
-				.endsWith("USING " + method + " (" + expectedColumns + ")");
+				.as("인덱스 %s의 종류·열 구성·정렬 방향·부분 조건 중 하나가 설계와 다르다", indexName)
+				.endsWith(expectedTail);
 	}
 
 	private User givenUser(String providerUserId) {

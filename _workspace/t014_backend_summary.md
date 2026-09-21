@@ -319,3 +319,133 @@ SyncAttemptSchemaTest  tests="9"  failures="0" errors="0"
 
 기존 네 스키마 테스트는 건드리지 않았다. 두 새 축(CHECK 허용 케이스, VARCHAR 길이)의 소급
 적용 여부는 리더 판단으로 남긴다. 트러블슈팅 로그는 리더·QA 판정대로 추가하지 않았다.
+
+---
+
+## 새 축 2개 소급 적용 + `assertIndex` 통일 (사용자 승인 후 후속 커밋)
+
+**마이그레이션 SQL은 한 글자도 바꾸지 않았다.** 테스트 파일 다섯만 고쳤다.
+
+### 고친 파일
+
+```
+src/test/java/com/petgyebu/telo/user/UserSchemaTest.java          (6 → 8건)
+src/test/java/com/petgyebu/telo/budget/BudgetSchemaTest.java      (10 → 12건)
+src/test/java/com/petgyebu/telo/account/AccountSchemaTest.java    (10 → 12건)
+src/test/java/com/petgyebu/telo/category/CategorySchemaTest.java  (10 → 11건)
+src/test/java/com/petgyebu/telo/sync/SyncAttemptSchemaTest.java   (헬퍼 시그니처만, 9건 유지)
+docs/11-troubleshooting-log.md                                     (19번 항목)
+```
+
+`TransactionSchemaTest`는 이미 세 축을 다 갖고 있어 손대지 않았다.
+
+### 1. CHECK 허용 케이스 소급 (9종)
+
+| 테이블 | CHECK | 허용 케이스로 단언한 값 |
+|---|---|---|
+| `users` | `ck_users_provider` | KAKAO, APPLE |
+| `users` | `ck_users_character_type` | DOG, CAT, null(선택 전) |
+| `user_consents` | `ck_user_consents_consent_type` | 4종 전부 |
+| `budget_periods` | `ck_budget_periods_status` | ACTIVE, CLOSED |
+| `budget_periods` | `ck_budget_periods_target_amount` | 양수(기존 테스트가 이미 덮는다) |
+| `status_thresholds` | `ck_status_thresholds_status_code` | 6종 전부 |
+| `status_thresholds` | `ck_status_thresholds_start_rate` | 경계 0.00 |
+| `accounts` | `ck_accounts_consent_status` | ACTIVE, EXPIRED, REVOKED |
+| `accounts` | `ck_accounts_display_mode` | BADGE, HIDDEN |
+
+`categories`·`merchant_keyword_rules`에는 CHECK가 없어 넣지 않았다(없는 것을 만들지 않는다).
+
+### 2. `VARCHAR` 길이 소급
+
+`assertColumnType(table, column, udtName, length)`를 네 파일에 같은 모양으로 뒀다. 문자열이
+아닌 타입은 **`null`을 기대**하게 해서 숫자·시각 컬럼이 문자열로 바뀌는 반대 방향 변이도
+같은 단언에 걸린다. 덮은 VARCHAR 16개: `users` 4, `user_consents` 2, `budget_periods` 1,
+`status_thresholds` 1, `accounts` 6, `categories` 2. 비문자열 타입도 함께 못 박았다
+(`int8`·`int2`·`bool`·`date`·`numeric`·`timestamptz`·`jsonb`).
+
+### 3. `assertIndex` 통일
+
+세 벌(열 구성만 / +종류 / +부분 조건)을 가장 넓은 T-014 버전으로 다섯 파일에 통일했다.
+조건 인자가 `null`이면 `WHERE` 절이 **없는 것**까지 단언한다. 기존 인덱스 단언의 기대값에
+종류(`btree`, `merchant_keyword_rules`만 `gin`)와 조건(전부 `null`)을 새로 채웠다.
+**공유 유틸리티 클래스는 만들지 않았다** — 사용자가 고른 "각 테스트 독립" 구조를 유지한다.
+
+### 양방향 증명 — 같은 변이 7종을 소급 전후로
+
+| # | 변이 | 소급 전 | 소급 후 |
+|---|---|---|---|
+| 1 | `ck_users_character_type`에서 `'CAT'` 제거 | 통과 | FAILED |
+| 2 | `users.email` `VARCHAR(320)` → `VARCHAR(255)` | 통과 | FAILED |
+| 3 | `ix_users_joined_at`을 `btree` → `brin` | 통과 | FAILED |
+| 4 | `ck_accounts_consent_status`에서 `'REVOKED'` 제거 | 통과 | FAILED |
+| 5 | `accounts.bank_code` `VARCHAR(10)` → `VARCHAR(100)` | 통과 | FAILED |
+| 6 | `ix_accounts_user_id`에 `WHERE included_in_budget` 추가 | **FAILED** | FAILED |
+| 7 | `ck_budget_periods_status`에서 `'CLOSED'`, `status_code`에서 `'WAKE'` 제거 | 통과 | FAILED |
+
+```
+--- BEFORE (소급 전 테스트 + 변이 7종) ---
+accounts 스키마 제약 검증 > 설계한 인덱스가 실제로 만들어져 있다 — 이름과 대상 열 구성까지 FAILED
+76 tests completed, 1 failed
+BUILD FAILED in 20s
+
+--- AFTER (소급 후 테스트 + 같은 변이 7종) ---
+accounts … > 컬럼 타입이 설계와 일치한다 — udt_name과 VARCHAR 길이까지 FAILED
+accounts … > 설계한 인덱스가 실제로 만들어져 있다 — 종류·열 구성·정렬 방향·부분 조건까지 FAILED
+accounts … > 명세에 있는 열거형 값은 전부 저장된다 — CHECK가 과도하게 좁지 않다 FAILED
+budget_periods·status_thresholds … > 명세에 있는 열거형 값은 전부 저장된다 … FAILED
+users·user_consents … > 컬럼 타입이 설계와 일치한다 — udt_name과 VARCHAR 길이까지 FAILED
+users·user_consents … > 설계한 인덱스가 실제로 만들어져 있다 … FAILED
+users·user_consents … > 명세에 있는 열거형 값은 전부 저장된다 … FAILED
+83 tests completed, 7 failed
+BUILD FAILED in 21s
+```
+
+6번이 소급 전에도 잡힌 것은 옛 헬퍼가 조건을 봐서가 아니라 `endsWith("(user_id)")`가 우연히
+어긋나서다. 조건을 **빼는** 방향이었다면 그대로 통과했을 것이다.
+
+실패 메시지 일부.
+
+```
+[users.email의 길이가 설계와 다르다]
+expected: 320
+ but was: 255
+
+[인덱스 ix_users_joined_at의 종류·열 구성·정렬 방향·부분 조건 중 하나가 설계와 다르다]
+Expecting actual:
+  "CREATE INDEX ix_users_joined_at ON public.users USING brin (joined_at)"
+to end with:
+  "USING btree (joined_at)"
+
+ERROR: new row for relation "users" violates check constraint "ck_users_character_type"
+ERROR: new row for relation "accounts" violates check constraint "ck_accounts_consent_status"
+ERROR: new row for relation "budget_periods" violates check constraint "ck_budget_periods_status"
+```
+
+**우연한 커버리지 하나를 발견했다.** `ck_users_provider`의 `'APPLE'`과
+`ck_status_thresholds_status_code`의 `'OVER_BUDGET'`은 소급 전에도 잡혔다. 기존 테스트가
+마침 그 값을 쓰고 있었기 때문이다. 어떤 값이 우연히 덮이는지는 테스트를 하나하나 읽기 전엔
+알 수 없어, 목록 전체를 명시적으로 단언하는 쪽으로 갔다.
+
+### 소급 후 검증
+
+```
+$ git checkout HEAD -- src/main/resources/db/migration/   # 변이 원복
+$ ./gradlew build --rerun-tasks
+BUILD SUCCESSFUL in 21s
+
+AccountSchemaTest      tests="12"
+BudgetSchemaTest       tests="12"
+CategorySchemaTest     tests="11"
+SyncAttemptSchemaTest  tests="9"
+TransactionSchemaTest  tests="22"
+UserSchemaTest         tests="8"
+```
+
+### 범위 밖으로 남긴 것
+
+`UserSchemaTest`에는 CHECK **거부** 케이스가 원래 없다(`ck_users_provider`·
+`ck_users_character_type`을 통째로 지워도 잡히지 않는다). 이번 지시는 허용 케이스 소급이라
+손대지 않았다. 필요하면 별도 Task로 올린다.
+
+트러블슈팅 로그 19번을 추가했다(분류: 조용한 실패 / 테스트 설계, PR `—`). 요약 표 행, "조용한
+실패" 건수 7 → 8, 되짚어 보기 표와 양방향 검증 목록까지 함께 갱신했다.
