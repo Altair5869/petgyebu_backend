@@ -75,7 +75,7 @@ chore/{슬러그}               F-ID 없는 인프라·기술 부채
 | | ID | 제목 | 브랜치 | 완료 기준 | 의존 | 차단 |
 |---|---|---|---|---|---|---|
 | [x] | T-013 | `categories`·`merchant_keyword_rules` 스키마와 시드 | `feature/F-OAVYWT-category-schema` | ✅ 완료. QA PASS 12 / FIX 2 / REDO 0. 키워드 룰 시드는 목록이 확정되지 않아 T-019로 미뤘다 | T-001 | #19 |
-| [ ] | T-014 | `transactions`·`transfer_links`·`sync_attempts` 스키마와 엔티티 | `feature/F-OAVYWT-schema` | 마이그레이션 적용, 유니크·부분 인덱스 전부 생성 확인 | T-006, T-013 | — |
+| [x] | T-014 | `transactions`·`transfer_links`·`sync_attempts` 스키마와 엔티티 | `feature/F-OAVYWT-schema` | ✅ 완료. QA PASS 13 / FIX 3 / REDO 0 | T-006, T-013 | 미정 |
 | [ ] | T-015 | 코드에프 거래 조회 연동과 90일 페이지네이션 | `feature/F-OAVYWT-fetch` | 90일치가 페이지 단위 순차 호출로 전부 수집된다. 단일 호출로 안 채워지는 경우를 재현해 확인 | T-008, T-014 | **B-CODEF**. T-006에서 `accounts` 상태 전이 메서드(`EXPIRED`·`REVOKED`·재인증·집계 제외)와 `updated_at` 갱신 수단을 미결로 넘겼다. |
 | [ ] | T-016 | 중복 거래 판정과 저장 | `feature/F-OAVYWT-dedup` | 같은 거래를 두 번 수집해도 행이 늘지 않는다. 유니크 제약 위반이 정상 처리된다 | T-015 | — |
 | [ ] | T-017 | 이체 후보 매칭 함수 | `feature/F-OAVYWT-transfer-match` | 조건 3개(금액 완전 일치 + 10분 이내 + 연결된 계좌 쌍)를 AND로 검사한다. 하나의 출금에 여러 입금이 대응하면 자동 연결하지 않는다. **F-KBBFRU에서 재사용 가능한 형태로 분리** | T-016 | — |
@@ -198,3 +198,30 @@ chore/{슬러그}               F-ID 없는 인프라·기술 부채
 | B-GCP | T-048, T-049 |
 
 **차단 없는 41개 중 34개는 앞선 Task에 의존해 순서를 기다리는 것뿐이다.** 외부 조건과 무관하므로 앞 단계가 끝나는 대로 이어서 진행할 수 있다.
+
+---
+
+## 스키마 단언 전수 점검 (2026-09-21, T-014 푸시 전)
+
+마이그레이션에 실재하는 구조를 종류별로 세어 단언 유무와 대조했다. 개별 구멍을 쫓는 대신 목록을 만들어 대조하는 방식이며, 이 점검에서 `transfer_links`의 입금 쪽 `ON DELETE CASCADE`가 무방비인 것을 찾았다(트러블슈팅 19번).
+
+**덮인 축** — 전부 양방향으로 증명됨
+
+| 구조 | 개수 | 단언 |
+|---|---|---|
+| `NOT NULL` | 58 | 테이블별 nullable 맵 통째 비교 |
+| `CREATE INDEX` | 14 | `pg_indexes`의 `indexdef` — 종류·열 구성·정렬 방향·부분 조건 |
+| `REFERENCES` | 13 | CASCADE·NO ACTION·SET NULL 동작 테스트 |
+| `CHECK` | 13 | 허용 케이스 + 거부 케이스 + 제약 이름 |
+| `UNIQUE` | 11 | 거부 + 허용 + 제약 이름 |
+| `VARCHAR` 길이 | 17 | `character_maximum_length` |
+
+**단언하지 않기로 한 것** — 근거를 남긴다. 나중에 "왜 안 했지"가 나오지 않게 하기 위함이다.
+
+| 구조 | 개수 | 넘어가는 근거 |
+|---|---|---|
+| `GENERATED ALWAYS AS IDENTITY` | 8 | **자가 검출된다.** identity를 떼면 `id` 없는 INSERT가 null 위반으로 죽어 기존 테스트가 잡는다. `categories`만 반대 방향(identity가 *붙는* 것)이라 별도 단언이 필요했고 `CategorySchemaTest`에 이미 있다 |
+| `PRIMARY KEY` | 10 | 실질 위험은 명시적 ID를 쓰는 `categories`뿐이다. 나머지는 identity가 값을 만들어 중복이 생기지 않는다 |
+| `DEFAULT` | 18 | 애플리케이션 경로에서 엔티티가 항상 값을 채워 DEFAULT가 발화하지 않는다. 실사용처가 있는 `transactions.category_id DEFAULT 99`만 예외로 이미 단언돼 있다. raw SQL이나 배치 INSERT가 생기면 그때 재검토한다 |
+
+**앞으로 스키마 Task를 할 때**: 위 "덮인 축" 6가지를 처음부터 전부 넣는다. 각 Task 입력 명세에 이 표를 옮겨 적는다. 그리고 **같은 제약이 두 컬럼에 걸려 있으면 양쪽을 각각 확인한다** — 한쪽만 보면 다른 쪽이 통째로 비어도 통과한다.
