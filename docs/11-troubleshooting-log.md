@@ -32,8 +32,9 @@
 | 16 | 마이그레이션 순서 검사가 커밋 전에는 조용히 건너뛴다 | 검증 방법 | #16 |
 | 17 | 인덱스를 지워도 빌드와 스키마 테스트가 전부 통과한다 | **조용한 실패** / 테스트 설계 | #18 |
 | 18 | `NOT NULL`을 지워도 빌드와 스키마 테스트가 전부 통과한다 | **조용한 실패** / 테스트 설계 | #19 |
+| 19 | 축은 있는데 적용 범위가 좁다 — CHECK 값 제거·CHECK 통째 삭제·`VARCHAR` 길이 변경이 새어 나간다 | **조용한 실패** / 테스트 설계 | #20 |
 
-**가장 많이 나온 유형은 "조용한 실패"다.** 빌드도 기동도 성공하는데 기능만 비어 있는 경우가 7건이었다. 이 유형이 위험한 이유는 아래 마지막 절에 정리했다.
+**가장 많이 나온 유형은 "조용한 실패"다.** 빌드도 기동도 성공하는데 기능만 비어 있는 경우가 8건이었다. 이 유형이 위험한 이유는 아래 마지막 절에 정리했다.
 
 ---
 
@@ -849,11 +850,275 @@ BUILD SUCCESSFUL in 16s
 
 ---
 
+## 19. 축은 있는데 적용 범위가 좁다 — CHECK 값 제거·CHECK 통째 삭제·`VARCHAR` 길이 변경이 새어 나간다
+
+**증상**
+
+T-014를 QA가 검증하면서 마이그레이션을 변이시켰더니, 명백한 결함 여섯 가지가 전부
+`BUILD SUCCESSFUL`이었다.
+
+```
+ck_users_character_type 에서 'CAT' 제거            → BUILD SUCCESSFUL
+ck_accounts_consent_status 에서 'REVOKED' 제거     → BUILD SUCCESSFUL
+ck_budget_periods_status 에서 'CLOSED' 제거        → BUILD SUCCESSFUL
+ck_status_thresholds_status_code 에서 'WAKE' 제거  → BUILD SUCCESSFUL
+accounts.bank_code VARCHAR(10) → VARCHAR(100)      → BUILD SUCCESSFUL
+users.email VARCHAR(320) → VARCHAR(255)            → BUILD SUCCESSFUL
+```
+
+`'CAT'`을 뺀 스키마는 고양이 캐릭터를 고를 수 없고, `'REVOKED'`를 뺀 스키마는 계좌 연결
+해제 상태를 저장할 수 없다. `'CLOSED'`를 뺀 스키마는 s9 배치가 예산 기간을 종료하지 못한다.
+기능이 통째로 막히는데 테스트 76건이 전부 초록이었다.
+
+**진단**
+
+17번(인덱스)·18번(`NOT NULL`)과 같은 계열로 보였지만 성격이 달랐다. **그 둘은 축이 아예
+없었고, 이번은 축이 이미 있었다.**
+
+- CHECK 단언은 있었다. 그런데 **거부 케이스만** 봤다. 정의되지 않은 값(`'PENDING'`,
+  `'RETRY'`)이 막히는지는 확인하면서 정의된 값이 통과하는지는 아무도 보지 않았다.
+  CHECK 목록에서 값을 빼는 변이는 거부 단언을 그대로 통과한다.
+  (여기서 "있었다"는 `AccountSchemaTest`·`TransactionSchemaTest` 이야기다.
+  `UserSchemaTest`·`BudgetSchemaTest`는 거부 단언조차 없었는데, 그 사실은 이 항목을 쓰고
+  난 뒤에야 드러났다. 아래 "같은 실수가 한 번 더" 절을 보라.)
+- 타입 단언도 있었다. T-013에서 `SMALLINT`→`INTEGER`를 잡으려고 `udt_name`을 넣었다.
+  그런데 `VARCHAR(10)`과 `VARCHAR(320)`의 `udt_name`은 **둘 다 `varchar`다.** 문자열
+  컬럼에서는 이 축이 사실상 아무것도 보지 않는다.
+
+더 뼈아픈 것은 **두 해법이 이미 프로젝트 안에 있었다는 점이다.** "허용 케이스도 함께
+본다"는 원리는 T-023에서 유니크 제약에 대해 얻었고(유니크를 과도하게 좁혀도 거부 단언은
+통과한다), 그 자리에는 `sameBankDifferentMaskedNoForSameUserIsAllowed` 같은 허용 케이스가
+짝으로 들어가 있다. 그 원리를 CHECK로 옮기지 않았을 뿐이다.
+
+**원인**
+
+**있는 축을 믿고 그 옆을 보지 않았다.** "CHECK 테스트가 있다", "타입 단언이 있다"는 사실이
+"그 축이 변이를 잡는다"는 확인을 대신했다. 축의 존재와 축의 적용 범위는 다른 문제인데
+목록에 체크가 들어간 것으로 만족했다.
+
+`assertIndex` 헬퍼가 세 벌로 갈라져 있던 것도 같은 뿌리다. T-013에서 인덱스 종류를,
+T-014에서 부분 조건을 새로 보기 시작했지만 **앞서 만든 파일로 되돌아가지 않았다.** 그래서
+같은 이름의 헬퍼가 파일마다 다른 것을 보고 있었다.
+
+| 파일 | `assertIndex`가 보던 것 |
+|---|---|
+| `UserSchemaTest`·`BudgetSchemaTest`·`AccountSchemaTest` | 열 구성만 |
+| `CategorySchemaTest` | + 인덱스 종류(`USING gin`/`btree`) |
+| `TransactionSchemaTest`·`SyncAttemptSchemaTest` | + 부분 조건(`WHERE ...`) |
+
+**해결**
+
+세 가지를 다섯 파일에 한 번에 맞췄다.
+
+1. **CHECK 허용 케이스.** 각 마이그레이션의 CHECK 목록을 읽어 정의된 값을 raw INSERT로
+   하나씩 넣고, 저장된 뒤 되읽어 값까지 확인한다. 9종 전부에 넣었다(`categories`는 CHECK가
+   없어 해당 없음).
+2. **`VARCHAR` 길이.** `assertColumnType`이 `character_maximum_length`를 함께 본다.
+   문자열이 아닌 타입은 **null을 기대하게** 해서, 숫자·시각 컬럼이 문자열로 바뀌는 반대
+   방향 변이도 같은 단언에 걸리게 했다.
+3. **`assertIndex` 통일.** 가장 넓은 것(부분 조건까지 보는 T-014 버전)으로 다섯 파일을
+   맞췄다. 조건 인자가 null이면 `WHERE` 절이 **없는 것**까지 단언한다.
+
+```java
+String expectedTail = "USING " + method + " (" + expectedColumns + ")"
+		+ (expectedPredicate == null ? "" : " WHERE " + expectedPredicate);
+assertThat(definitions.get(0))
+		.as("인덱스 %s의 종류·열 구성·정렬 방향·부분 조건 중 하나가 설계와 다르다", indexName)
+		.endsWith(expectedTail);
+```
+
+17·18번과 마찬가지로 공유 유틸리티 클래스는 만들지 않고 각 파일에 같은 모양의 헬퍼를 뒀다.
+테스트 파일끼리 의존하면 한 테스트를 고칠 때 다른 테스트가 함께 흔들린다.
+
+**검증**
+
+변이 7종을 **동시에** 넣고 소급 전후를 한 번씩 돌렸다. 마이그레이션은 `git checkout`으로
+원복했다.
+
+```
+--- BEFORE (소급 전 테스트 + 변이 7종) ---
+accounts 스키마 제약 검증 > 설계한 인덱스가 실제로 만들어져 있다 — 이름과 대상 열 구성까지 FAILED
+76 tests completed, 1 failed
+
+--- AFTER (소급 후 테스트 + 같은 변이 7종) ---
+accounts … > 컬럼 타입이 설계와 일치한다 — udt_name과 VARCHAR 길이까지 FAILED
+accounts … > 설계한 인덱스가 실제로 만들어져 있다 — 종류·열 구성·정렬 방향·부분 조건까지 FAILED
+accounts … > 명세에 있는 열거형 값은 전부 저장된다 — CHECK가 과도하게 좁지 않다 FAILED
+budget_periods·status_thresholds … > 명세에 있는 열거형 값은 전부 저장된다 … FAILED
+users·user_consents … > 컬럼 타입이 설계와 일치한다 — udt_name과 VARCHAR 길이까지 FAILED
+users·user_consents … > 설계한 인덱스가 실제로 만들어져 있다 … FAILED
+users·user_consents … > 명세에 있는 열거형 값은 전부 저장된다 … FAILED
+83 tests completed, 7 failed
+```
+
+**7건 중 6건이 소급 전에는 조용했다.** 유일하게 잡힌 하나는 `ix_accounts_user_id`에
+`WHERE` 절을 붙인 변이인데, 이것도 옛 헬퍼가 조건을 봐서가 아니라 `endsWith("(user_id)")`가
+우연히 어긋나서였다. 반대 방향(조건을 **빼는** 변이)이었다면 그대로 통과했을 것이다.
+
+실패 메시지가 어느 축인지 짚어 준다.
+
+```
+[users.email의 길이가 설계와 다르다]
+expected: 320
+ but was: 255
+
+[인덱스 ix_users_joined_at의 종류·열 구성·정렬 방향·부분 조건 중 하나가 설계와 다르다]
+Expecting actual:
+  "CREATE INDEX ix_users_joined_at ON public.users USING brin (joined_at)"
+to end with:
+  "USING btree (joined_at)"
+
+ERROR: new row for relation "users" violates check constraint "ck_users_character_type"
+```
+
+원복 후 전체 빌드는 초록이다.
+
+```
+$ ./gradlew build --rerun-tasks
+BUILD SUCCESSFUL in 21s
+```
+
+스키마 테스트가 `users` 6→8, `budget` 10→12, `accounts` 10→12, `categories` 10→11건으로
+늘었다(아래 거부 케이스까지 더한 최종값은 `users` 9, `budget` 13이다).
+
+**한 가지 더 나온 사실.** `ck_users_provider`의 `'APPLE'`과 `ck_status_thresholds_status_code`의
+`'OVER_BUDGET'`은 소급 전에도 잡혔다. 기존 테스트가 마침 그 값을 쓰고 있었기 때문이다
+(`sameProviderUserIdOnAnotherProviderIsAllowed`, `overBudgetThresholdHasNoEndRate`).
+**우연한 커버리지다.** 어떤 값이 우연히 덮이고 어떤 값이 새는지는 테스트를 하나하나 읽기
+전에는 알 수 없으므로, 목록 전체를 명시적으로 단언하는 편이 싸다.
+
+**같은 실수가 한 번 더 — 허용 케이스를 채우면서 거부 케이스가 빈 것을 못 봤다**
+
+위 소급 작업을 끝내고 푸시 전 점검에서 리더가 한 가지를 더 찾았다. 내가 채운 것은
+**허용 케이스**뿐이었고, `UserSchemaTest`·`BudgetSchemaTest`·`CategorySchemaTest`에는
+**거부 케이스가 처음부터 없었다.** 제약 이름으로 거부를 단언하는 곳을 세면 이랬다.
+
+```
+TransactionSchemaTest   7
+AccountSchemaTest       2
+SyncAttemptSchemaTest   2
+UserSchemaTest          0
+BudgetSchemaTest        0
+CategorySchemaTest      0
+```
+
+리더가 `ck_users_provider`와 `ck_users_character_type`을 **통째로 삭제**하고 돌리자 그대로
+통과했다.
+
+```
+$ ./gradlew test --rerun-tasks --tests 'com.petgyebu.telo.user.UserSchemaTest'
+BUILD SUCCESSFUL in 10s
+```
+
+**허용 케이스와 거부 케이스는 서로를 대체하지 않는다.** 제약이 통째로 사라지면 *모든* 값이
+통과하므로 허용 단언은 전부 초록이다. 반대로 목록에서 값 하나만 빠지면 거부 단언은 그대로
+통과한다. 둘은 서로 다른 변이를 잡는다.
+
+`UserSchemaTest`에 CHECK 3종, `BudgetSchemaTest`에 CHECK 4종(값 범위 둘 포함)의 거부
+케이스를 `JdbcTemplate` raw INSERT로 추가하고 제약 이름까지 단언했다. `@Enumerated(STRING)`
+때문에 JPA로는 잘못된 값 자체를 넣을 수 없어 raw SQL이 필요하다. `categories`와
+`merchant_keyword_rules`에는 CHECK가 하나도 없어 넣지 않았다 — 없는 것을 만들지 않는다.
+
+증명은 네 갈래로 했다.
+
+```
+### CHECK 4개 통째 삭제 + 거부 케이스 없던 테스트 (소급 전)
+$ ./gradlew test --rerun-tasks --tests '*UserSchemaTest' --tests '*BudgetSchemaTest'
+BUILD SUCCESSFUL in 10s
+
+### 같은 변이 + 거부 케이스 추가 후
+budget_periods·status_thresholds … > 정의되지 않은 status·status_code는 저장할 수 없다 — CHECK 제약 FAILED
+users·user_consents … > 정의되지 않은 열거형 값은 저장할 수 없다 — CHECK 제약 셋 FAILED
+22 tests completed, 2 failed
+AssertionError: Expecting code to raise a throwable.
+```
+
+그리고 두 변이가 **서로 다른 테스트에 걸린다는 것**을 같은 CHECK 하나로 보였다.
+
+```
+### (i) ck_budget_periods_status 에서 'CLOSED' 값 하나만 제거
+… > 명세에 있는 열거형 값은 전부 저장된다 — CHECK가 과도하게 좁지 않다 FAILED
+13 tests completed, 1 failed
+
+### (ii) ck_budget_periods_status 통째 삭제
+… > 정의되지 않은 status·status_code는 저장할 수 없다 — CHECK 제약 FAILED
+13 tests completed, 1 failed
+```
+
+(i)에서는 거부 테스트가, (ii)에서는 허용 테스트가 각각 멀쩡히 통과한다. 한쪽만 있으면
+다른 쪽 변이는 그대로 새어 나간다.
+
+**배운 것**
+
+**축이 있다는 것과 축이 넓다는 것은 다르다.** 17·18번은 "없는 축을 만든" 일이었고 이번은
+"있는 축의 사각지대"였다. 후자가 더 잡기 어렵다. 검증 목록에 이미 체크가 들어가 있어
+다시 들여다볼 이유가 없어 보이기 때문이다. **축을 새로 추가할 때는 그 축이 못 보는 것이
+무엇인지를 같이 적어야 한다.** `udt_name`을 넣을 때 "길이는 보지 못한다"를 함께 적었다면
+T-013에서 끝났을 일이다.
+
+**원리를 얻은 자리와 원리를 적용할 자리는 다르다.** "허용 케이스도 본다"는 T-023에서
+유니크에 대해 얻었지만 정작 필요한 곳은 CHECK였다. 교훈을 그 자리에만 반영하면 옆 칸은
+그대로 빈다. 새 원리를 얻으면 **같은 성질의 제약이 어디에 또 있는지** 한 번 훑어야 한다.
+
+**이 세션에서 같은 모양의 실수가 다섯 번 나왔다.** 축을 하나 채우면서 그 축의 반대편을
+매번 비워 뒀다.
+
+| 축 | 채운 쪽 | 비워 둔 쪽 | 드러난 계기 |
+|---|---|---|---|
+| 유니크 | 제약 이름 | 허용 범위 | T-023 |
+| 인덱스 | 존재 | 열 구성·종류 | 17번, T-013 |
+| 타입 | `udt_name` | VARCHAR 길이 | T-014 QA |
+| CHECK | 허용 케이스 | 거부 케이스 | 푸시 전 점검 |
+| FK CASCADE | 출금 쪽 | **입금 쪽** | 푸시 전 전수 점검 |
+
+**다섯 번째는 앞의 넷과 성격이 다르다.** 앞의 넷은 *다른 종류의 단언*이 빠진 것이었다.
+이번은 **같은 단언을 대칭 위치에 적용하지 않은 것**이다. `transfer_links`는 두 컬럼에
+똑같이 `ON DELETE CASCADE`가 걸려 있는데 테스트는 출금 거래만 지웠다. 입금 쪽 FK의
+`ON DELETE` 규칙은 한 번도 실행되지 않아, 그 CASCADE를 떼도 전체 빌드가 초록이었다.
+
+```
+### 입금 쪽 ON DELETE CASCADE만 제거 (대칭 테스트 추가 전)
+$ ./gradlew test --rerun-tasks --tests '*TransactionSchemaTest'
+BUILD SUCCESSFUL in 8s
+```
+
+**같은 제약이 두 컬럼에 걸려 있으면 한쪽만 확인해서는 안 된다.** 대칭 테스트를 넣고 두
+변이를 따로 돌리자 각각 제 짝만 깨진다.
+
+```
+### (A) 입금 쪽만 제거
+… > 입금 거래를 지워도 이체 연결이 함께 지워진다 — 입금 쪽 ON DELETE CASCADE FAILED
+23 tests completed, 1 failed
+ERROR: … violates foreign key constraint "transfer_links_deposit_transaction_id_fkey"
+
+### (B) 출금 쪽만 제거
+… > 출금 거래를 지우면 이체 연결도 함께 지워진다 — 출금 쪽 ON DELETE CASCADE FAILED
+23 tests completed, 1 failed
+ERROR: … violates foreign key constraint "transfer_links_withdrawal_transaction_id_fkey"
+```
+
+**발견 방법도 앞의 넷과 달랐다.** 넷은 QA나 변이가 우연히 그 자리를 건드려 드러났지만,
+이것은 **마이그레이션에 실재하는 구조를 종류별로 세어 단언 유무와 대조하는 전수 점검**에서
+나왔다. 구멍을 쫓는 대신 목록을 만들어 맞춰 보는 쪽이 남은 사각지대를 찾는 데 효율적이다.
+
+다섯 번 다 "한쪽을 넣었다"에서 작업이 끝났다. **한 축을 채우는 작업이 곧 그 축의 반대편을
+보는 계기가 되어야 한다.** 제약을 검증하는 단언은 거의 언제나 쌍이다 — 막아야 할 것이
+막히는가와 통과해야 할 것이 통과하는가, 있어야 할 것이 있는가와 없어야 할 것이 없는가.
+한쪽만 쓰면 반대 방향 변이가 그대로 지나간다. 다음부터는 단언을 추가할 때 "이것의 반대
+방향은 무엇이고 그것은 누가 잡는가"를 같은 자리에서 답하고 넘어간다.
+
+**헬퍼가 갈라지는 것은 기능 차이가 아니라 시간 차이 때문이다.** 세 벌로 갈린 `assertIndex`는
+어느 것도 틀리지 않았다. 그저 만들어진 시점이 달랐을 뿐이다. 파일 간 복사로 관례를 퍼뜨리는
+구조에서는 나중에 넓어진 헬퍼가 앞 파일로 돌아가지 않는다. **복사로 전파하기로 했다면
+갱신도 복사로 전파해야 한다.**
+
+---
+
 ## 되짚어 보기
 
 ### 조용한 실패가 가장 많았다
 
-18건 중 7건(3·4·9·10·11·17·18번)이 **빌드도 기동도 성공하는데 기능만 비어 있는** 유형이었다.
+19건 중 8건(3·4·9·10·11·17·18·19번)이 **빌드도 기동도 성공하는데 기능만 비어 있는** 유형이었다.
 
 | 사례 | 겉보기 | 실제 |
 |---|---|---|
@@ -864,6 +1129,7 @@ BUILD SUCCESSFUL in 16s
 | out-of-order 마이그레이션 | 새 DB에서 통과 | 운영 DB에서만 실패 |
 | 인덱스 누락 | 빌드 통과, 스키마 테스트 8건 전부 통과 | 인덱스 0개, 조회가 풀스캔 |
 | `NOT NULL` 누락 | 빌드 통과, `validate` 통과, 스키마 테스트 9건 전부 통과 | 열이 null을 받는다 |
+| CHECK 값 제거·통째 삭제, `VARCHAR` 길이 변경 | 빌드 통과, 스키마 테스트 76건 전부 통과 | 애플 로그인·계좌 해제·기간 종료가 막히고, CHECK가 없어도 아무도 모른다 |
 
 공통점이 있다. **성공 신호가 있어서 더 위험하다.** 에러가 나면 고치게 되지만 이들은 "잘 되고 있다"는 잘못된 확신을 준다.
 
@@ -879,6 +1145,8 @@ BUILD SUCCESSFUL in 16s
 - CI 가드: 낮은 버전을 넣으면 정말 빌드가 깨지는지
 - 인덱스 단언: 인덱스를 지우거나 대상 열을 바꾸면 정말 테스트가 깨지는지
 - `NOT NULL` 단언: 제약을 지우면, 그리고 **반대로** null 허용 열에 제약을 붙이면 정말 테스트가 깨지는지
+- CHECK 허용 케이스·`VARCHAR` 길이 단언: 같은 변이 7종을 소급 **전후**로 한 번씩 돌려, 전에는 조용하고 후에는 깨지는지
+- CHECK 거부 케이스: 제약을 **통째로 삭제**하면 깨지는지, 그리고 값 하나만 빼는 변이와 **서로 다른 테스트**에 걸리는지
 
 통과만 확인하면 "원래부터 통과했을" 가능성을 배제할 수 없다. **막으려던 것이 실제로 막히는지 확인해야 그 방어가 작동한다고 말할 수 있다.**
 
