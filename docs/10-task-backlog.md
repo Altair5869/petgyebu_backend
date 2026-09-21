@@ -75,7 +75,7 @@ chore/{슬러그}               F-ID 없는 인프라·기술 부채
 | | ID | 제목 | 브랜치 | 완료 기준 | 의존 | 차단 |
 |---|---|---|---|---|---|---|
 | [x] | T-013 | `categories`·`merchant_keyword_rules` 스키마와 시드 | `feature/F-OAVYWT-category-schema` | ✅ 완료. QA PASS 12 / FIX 2 / REDO 0. 키워드 룰 시드는 목록이 확정되지 않아 T-019로 미뤘다 | T-001 | #19 |
-| [x] | T-014 | `transactions`·`transfer_links`·`sync_attempts` 스키마와 엔티티 | `feature/F-OAVYWT-schema` | ✅ 완료. QA PASS 13 / FIX 3 / REDO 0 | T-006, T-013 | 미정 |
+| [x] | T-014 | `transactions`·`transfer_links`·`sync_attempts` 스키마와 엔티티 | `feature/F-OAVYWT-schema` | ✅ 완료. QA PASS 13 / FIX 3 / REDO 0 | T-006, T-013 | #20 |
 | [ ] | T-015 | 코드에프 거래 조회 연동과 90일 페이지네이션 | `feature/F-OAVYWT-fetch` | 90일치가 페이지 단위 순차 호출로 전부 수집된다. 단일 호출로 안 채워지는 경우를 재현해 확인 | T-008, T-014 | **B-CODEF**. T-006에서 `accounts` 상태 전이 메서드(`EXPIRED`·`REVOKED`·재인증·집계 제외)와 `updated_at` 갱신 수단을 미결로 넘겼다. |
 | [ ] | T-016 | 중복 거래 판정과 저장 | `feature/F-OAVYWT-dedup` | 같은 거래를 두 번 수집해도 행이 늘지 않는다. 유니크 제약 위반이 정상 처리된다 | T-015 | — |
 | [ ] | T-017 | 이체 후보 매칭 함수 | `feature/F-OAVYWT-transfer-match` | 조건 3개(금액 완전 일치 + 10분 이내 + 연결된 계좌 쌍)를 AND로 검사한다. 하나의 출금에 여러 입금이 대응하면 자동 연결하지 않는다. **F-KBBFRU에서 재사용 가능한 형태로 분리** | T-016 | — |
