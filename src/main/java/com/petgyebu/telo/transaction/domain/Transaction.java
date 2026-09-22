@@ -29,10 +29,19 @@ import lombok.NoArgsConstructor;
  * 사용률·소비 요약·카테고리별 분석이 전부 "사용자 + 기간" 기준이라, {@code accounts}를 거쳐
  * 조인하면 모든 집계 쿼리에 조인이 하나씩 붙는다(docs/09-db-design.md 3.4절).
  *
- * <p>그 대가로 {@code account}의 주인과 {@code user}가 어긋날 수 있다. DB는 이것을 막지 않는다.
- * 막으려면 {@code accounts}에 {@code UNIQUE (id, user_id)}를 새로 걸고 복합 FK를 걸어야 하는데
- * 설계 문서에 없는 제약이라 넣지 않았다. 문서가 정한 방어선은 "거래 저장은 반드시 계좌 조회를
- * 거친 경로로만 수행한다"이며, 그 경로는 T-015에서 만든다.
+ * <p>비정규화의 진짜 값은 조인 하나를 없애는 것이 아니라 <b>정렬</b>이다. 거래 목록은 전체
+ * 계좌를 통합해 최신순으로 보여주는데, {@code user_id}가 있으면 인덱스
+ * {@code (user_id, transacted_at DESC)} 하나를 위에서부터 읽으면 된다. 없으면 계좌 수만큼
+ * 인덱스를 스캔해 병합해야 하고 페이지네이션이 깊어질수록 나빠진다.
+ *
+ * <p><b>{@code account}의 주인과 {@code user}가 어긋나는 것은 DB가 막는다.</b> 2026-09-23에
+ * 복합 FK {@code (account_id, user_id) -> accounts (id, user_id)}를 걸었다. 그 전에는 코드
+ * 규율("거래 저장은 반드시 계좌 조회를 거친 경로로만")로만 막고 있었는데, 어긋나도 예외도
+ * 경고도 나지 않아 다른 사용자의 예산 사용률에 이 거래가 섞여도 알 수 없었다. 같은 구조의
+ * {@code reward_grants}·{@code push_logs}도 함께 걸었다.
+ *
+ * <p>그래도 <b>생성자가 받는 {@code user}는 반드시 {@code account.getUser()}여야 한다.</b>
+ * DB가 거부하는 것은 저장 시점이라, 어긋난 값을 넘기면 INSERT가 실패한다.
  *
  * <p>{@code amount}는 <b>언제나 양수다</b>(DB에 {@code CHECK (amount > 0)}가 있다). 수입·지출
  * 방향은 {@link TxnType}이 정한다.
@@ -56,7 +65,7 @@ public class Transaction {
 	@GeneratedValue(strategy = GenerationType.IDENTITY)
 	private Long id;
 
-	/** 비정규화된 소유자. {@code account.getUser()}와 같아야 하지만 DB가 강제하지는 않는다. */
+	/** 비정규화된 소유자. 복합 FK가 {@code account.getUser()}와 같음을 강제한다. */
 	@ManyToOne(fetch = FetchType.LAZY, optional = false)
 	@JoinColumn(name = "user_id", nullable = false)
 	private User user;
