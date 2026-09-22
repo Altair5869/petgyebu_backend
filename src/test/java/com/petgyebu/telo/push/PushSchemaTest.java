@@ -402,6 +402,9 @@ class PushSchemaTest {
 		// 열 순서까지 본다. reward_grants와 달리 user_id가 없는 2열이다.
 		assertIndex("push_logs", "uq_push_logs_period_threshold", "btree",
 				"budget_period_id, threshold_type", null);
+		// FK 자식 컬럼 인덱스. 탈퇴 시 users -> push_logs CASCADE에서 스캔된다.
+		// 위 유니크는 budget_period_id가 선행이라 user_id를 덮지 않는다.
+		assertIndex("push_logs", "ix_push_logs_user_id", "btree", "user_id", null);
 	}
 
 	@Test

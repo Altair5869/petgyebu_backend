@@ -24,6 +24,33 @@
 
 **열거형 값은 대문자 스네이크로 통일한다**(`AUTO_LINKED`, `OVER_BUDGET`).
 
+### FK 자식 컬럼에는 인덱스를 건다 (2026-09-22)
+
+**PostgreSQL은 FK의 참조하는 쪽(자식) 컬럼에 인덱스를 자동으로 만들지 않는다.** PK 쪽에만 인덱스가 생긴다. 부모 행을 지울 때 DB는 "이 행을 가리키는 자식이 있나"를 확인해야 하는데, 자식 컬럼에 인덱스가 없으면 **자식 테이블 전체를 훑는다.** 삭제되는 행마다 반복된다.
+
+측정 (PostgreSQL 16, `transactions`의 자기참조 FK, 거래 2000건 삭제):
+
+| 배경 데이터 | 인덱스 | 소요 |
+|---|---|---|
+| 5만 건 | 없음 | 3,005 ms |
+| 5만 건 | 있음 | **8 ms** |
+| 20만 건 | 없음 | 12,096 ms |
+
+지우는 행 수는 같은데 테이블이 커질수록 느려진다. 배경 4배에 시간 4배로 선형이다.
+
+**탈퇴는 즉시 전체 삭제다**(Q5). 사용자가 기다리는 화면에서 이 스캔이 돈다. 계좌 해제도 같은 경로다.
+
+**규칙**: FK 자식 컬럼에 인덱스를 건다. 다만 **부모 삭제가 실제로 일어나는 FK만** 대상이다 — 인덱스는 쓰기 비용이 있다.
+
+| 대상 | 예 |
+|---|---|
+| 건다 | 사용자·계좌·예산 기간처럼 삭제되는 부모를 가리키는 FK |
+| 걸지 않는다 | `categories`·`shop_items`처럼 삭제하지 않는 참조 테이블을 가리키는 FK |
+
+**복합 인덱스가 덮는지 확인할 때는 선행 열을 본다.** `UNIQUE (user_id, budget_period_id, ...)`는 `user_id`는 덮지만 `budget_period_id`는 덮지 않는다. 실제로 `reward_grants`와 `push_logs`가 이 함정에 걸려 있었다.
+
+2026-09-22에 네 곳(`transactions.linked_refund_transaction_id`, `sync_attempts.user_id`, `push_logs.user_id`, `reward_grants.budget_period_id`)을 추가했다. 이 문서의 인덱스 표들이 빠뜨린 것이었다.
+
 ### 기준 타임존 (2026-09-18, T-052)
 
 모든 시각 계산의 기준은 KST다. 단일 출처는 `com.petgyebu.telo.common.time.AppZone`이며, 코드 어디서도 `ZoneId.of("Asia/Seoul")`을 다시 쓰지 않는다.
@@ -262,6 +289,7 @@ erDiagram
 | `(account_id, transacted_at)` | 계좌 단위 조회, 동기화 시 최근 거래 확인 |
 | `(account_id, amount, transacted_at)` | **이체 후보 탐색.** 금액 완전 일치 + 10분 이내 조건을 이 인덱스로 좁힌다 |
 | `(transfer_status)` WHERE `transfer_status = 'PENDING_CONFIRM'` | 부분 인덱스. 확인 대기 후보만 모아 보는 화면용 |
+| `(linked_refund_transaction_id)` | **FK 자식 컬럼.** 자기참조 FK라 거래를 지울 때마다 참조하는 환불 거래를 찾아야 한다. 아래 참고 |
 
 **환불 순액 처리**: 원거래와 환불을 각각 행으로 저장하고 `linked_refund_transaction_id`로 잇는다. 목록에는 순액만 보이지만 **저장은 두 행 그대로** 한다. 상세 화면에서 원거래 금액과 환불 금액을 각각 보여줘야 하기 때문이다. 순액은 집계 시점에 계산한다.
 
@@ -295,7 +323,7 @@ erDiagram
 | `failure_reason` | VARCHAR(500) | NULL | |
 | `retry_count` | SMALLINT | NOT NULL, DEFAULT 0 | |
 
-**인덱스**: `(account_id, attempted_at DESC)`, `(trigger_type, attempted_at)` — 후자는 수집 성공률 95% 지표 집계용
+**인덱스**: `(account_id, attempted_at DESC)`, `(trigger_type, attempted_at)`, `(user_id)` — 두 번째는 수집 성공률 95% 지표 집계용, 세 번째는 FK 자식 컬럼(아래 참고)
 
 append-only라 `updated_at`이 없다.
 
@@ -398,6 +426,8 @@ append-only라 `updated_at`이 없다.
 
 **제약**: `UNIQUE (budget_period_id, threshold_type)`
 
+**인덱스**: `(user_id)` — FK 자식 컬럼. 위 유니크는 `budget_period_id`가 선행이라 `user_id`를 덮지 않는다(아래 참고)
+
 **이 유니크 제약이 "기간당 1회, 재발송 없음" 규칙을 DB에서 보장한다**(Q13). Upstash 키(`budget_period_id:threshold`)가 유실되거나 배치가 중복 실행돼도 두 번째 발송은 제약 위반으로 막힌다. Redis는 빠른 판정용이고 DB가 최종 방어선이다.
 
 `read_at`이 KPI "예산 초과 경고 확인율"의 분자다(Q11).
@@ -434,6 +464,8 @@ append-only라 `updated_at`이 없다.
 | `granted_at` | TIMESTAMPTZ | NOT NULL, DEFAULT now() | |
 
 **제약**: `UNIQUE (user_id, budget_period_id, condition_type)`
+
+**인덱스**: `(budget_period_id)` — FK 자식 컬럼. 위 유니크는 `user_id`가 선행이라 `budget_period_id`를 덮지 않는다(아래 참고)
 
 **이 유니크 제약이 "동일 조건 중복 지급 금지"를 보장한다.** 배치가 재실행돼도 두 번 지급되지 않는다.
 
