@@ -2,6 +2,7 @@ package com.petgyebu.telo.common;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import jakarta.persistence.Column;
 import com.petgyebu.telo.account.domain.Account;
 import com.petgyebu.telo.account.repository.AccountRepository;
 import com.petgyebu.telo.common.time.AppZone;
@@ -85,8 +86,8 @@ class UpdatedAtCallbackTest {
 	}
 
 	@Test
-	@DisplayName("updated_at을 가진 엔티티 여섯 개가 전부 @PreUpdate 콜백을 갖는다")
-	void everyEntityWithUpdatedAtHasCallback() {
+	@DisplayName("여섯 엔티티가 전부 @PreUpdate를 갖고 updatedAt이 updatable이다")
+	void everyEntityWithUpdatedAtHasCallback() throws NoSuchFieldException {
 		List<Class<?>> entities = List.of(
 				com.petgyebu.telo.account.domain.Account.class,
 				com.petgyebu.telo.budget.domain.BudgetPeriod.class,
@@ -108,6 +109,18 @@ class UpdatedAtCallbackTest {
 					.as("%s에 @PreUpdate가 없다. 수정해도 updated_at이 생성 시각에 고정된다",
 							entity.getSimpleName())
 					.isTrue();
+
+			// 애노테이션이 있어도 열이 updatable = false면 JPA가 UPDATE 문에서 빼버린다.
+			// 콜백은 필드를 바꾸는데 DB는 그대로라 조용히 깨진다. 동작 테스트가
+			// accounts 하나만 보므로 이 축이 없으면 나머지 다섯은 무방비다.
+			Field updatedAt = entity.getDeclaredField("updatedAt");
+			Column column = updatedAt.getAnnotation(Column.class);
+			if (column != null) {
+				assertThat(column.updatable())
+						.as("%s.updatedAt에 updatable = false가 붙었다. @PreUpdate가 값을 바꿔도"
+								+ " DB에 반영되지 않는다", entity.getSimpleName())
+						.isTrue();
+			}
 		}
 	}
 
