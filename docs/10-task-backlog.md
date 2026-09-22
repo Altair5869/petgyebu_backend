@@ -133,7 +133,7 @@ chore/{슬러그}               F-ID 없는 인프라·기술 부채
 
 | | ID | 제목 | 브랜치 | 완료 기준 | 의존 | 차단 |
 |---|---|---|---|---|---|---|
-| [x] | T-040 | Spring Batch 메타 테이블 마이그레이션 | `chore/batch-schema` | ✅ 완료. QA PASS 10 / FIX 2 / REDO 0. 원본 바이트 일치 + 배치 실행까지 검증 | T-023 | 미정 |
+| [x] | T-040 | Spring Batch 메타 테이블 마이그레이션 | `chore/batch-schema` | ✅ 완료. QA PASS 10 / FIX 2 / REDO 0. 원본 바이트 일치 + 배치 실행까지 검증 | T-023 | #23 |
 | [x] | T-041 | 보상·상점 스키마와 시드 | `feature/F-HPWCNJ-schema` | ✅ 완료. QA PASS 14 / FIX 3 / REDO 0. `shop_items` 시드는 아이템 목록·에셋이 확정되지 않아 T-044로 미뤘다 | T-023 | #21 |
 | [ ] | T-042 | s9 예산 기간 전환 배치 | `feature/F-FZUVLV-period-batch` | 매일 KST 00:05 실행. 기간 종료→새 기간 생성→상태 재계산이 **단일 트랜잭션**. 중간 실패 시 전부 롤백되는 것을 확인 | T-026, T-040 | — |
 | [ ] | T-043 | 절약 조건 판정과 크레딧 지급 | `feature/F-EZZFNU-reward` | 스냅샷 기준 판정. 10% 이상 감소 조건. 첫 기간은 비교 조건 생략. 중복 지급이 유니크 제약으로 막힌다. `SELECT FOR UPDATE` 확인 | T-041, T-042 | — |
