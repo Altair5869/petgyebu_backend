@@ -51,8 +51,18 @@ V202609211015__add_account_reauth_required.sql
 첫 마이그레이션은 T-001의 `users`·`user_consents`다. Sprint 1의 Account가 첫 대상일 것으로
 적어 뒀었으나, 계정이 모든 테이블의 뿌리라 순서가 바뀌었다.
 
-Spring Batch 메타 테이블(`BATCH_*`)은 아직 들어오지 않았다. T-040에서 Spring Batch 배포본의
-`schema-postgresql.sql`을 마이그레이션 파일로 옮긴다. **직접 작성하지 않는다.**
+Spring Batch 메타 테이블(`BATCH_*`)은 T-040에서
+`V202609221408__create_spring_batch_metadata.sql`로 들어왔다. 이 파일은 우리가 설계한
+스키마가 아니다. 마커 `-- >>> BEGIN spring-batch-core schema-postgresql.sql >>>` 아래는
+`org.springframework.batch:spring-batch-core:6.0.5`의 `schema-postgresql.sql`을 jar에서
+추출해 바이트 그대로 복사한 것이다. **직접 작성하지도, 고치지도 않는다.**
+`TIMESTAMP`(우리 관례는 `TIMESTAMPTZ`)·대문자 테이블명·`CREATE SEQUENCE`·`CHAR(1)`처럼
+이 디렉터리의 다른 규칙과 어긋나는 부분이 있지만 프레임워크가 그대로 기대하는 모양이다.
+주석은 마커 **위**에만 붙인다.
+
+`BatchSchemaSourceTest`가 마커 아래 구간을 실행 시점 클래스패스의 원본과 대조하므로,
+누가 손대거나 Spring Batch 버전이 올라가 원본이 바뀌면 그 테스트가 깨져 알려준다.
+버전을 올릴 때는 새 jar에서 다시 추출해 마커 아래를 통째로 교체하고 헤더의 sha256도 갱신한다.
 
 남은 마이그레이션 순서는 `docs/10-task-backlog.md`의 스키마 Task를 따른다.
 

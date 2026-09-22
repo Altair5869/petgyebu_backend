@@ -35,8 +35,9 @@
 | 19 | 축은 있는데 적용 범위가 좁다 — CHECK 값 제거·CHECK 통째 삭제·`VARCHAR` 길이 변경이 새어 나간다 | **조용한 실패** / 테스트 설계 | #20 |
 | 20 | 축이 DB 제약만 본다 — 엔티티 생성자를 뒤집어도 스키마 테스트가 전부 통과한다 | **조용한 실패** / 테스트 설계 | #21 |
 | 21 | 동작 단언 셋으로는 유니크의 열 구성이 고정되지 않는다 — `user_id`를 더해도 셋이 그대로 통과한다 | 검증 방법 / 테스트 설계 | #22 |
+| 22 | Spring Batch 6.0이 DataSource가 있어도 메타데이터를 DB에 쓰지 않는다 — Job은 `COMPLETED`로 끝난다 | **조용한 실패** / 메이저 버전 전환 | #23 |
 
-**가장 많이 나온 유형은 "조용한 실패"다.** 빌드도 기동도 성공하는데 기능만 비어 있는 경우가 9건이었다. 이 유형이 위험한 이유는 아래 마지막 절에 정리했다.
+**가장 많이 나온 유형은 "조용한 실패"다.** 빌드도 기동도 성공하는데 기능만 비어 있는 경우가 10건이었다. 이 유형이 위험한 이유는 아래 마지막 절에 정리했다.
 
 ---
 
@@ -1382,11 +1383,158 @@ DB 보장과 섞는 순간 "동작으로 구별 불가"라는 잘못된 결론�
 
 ---
 
+## 22. Spring Batch 6.0은 DataSource가 있어도 메타데이터를 DB에 쓰지 않는다 — Job은 `COMPLETED`로 끝난다
+
+**증상**
+
+T-040에서 Spring Batch 메타 테이블 마이그레이션을 넣고, 테이블이 만들어진 것만으로는
+부족하다는 판단에 따라 Testcontainers로 Job 하나를 실제로 돌리는 테스트를 붙였다.
+Job은 정상적으로 끝났는데 DB 조회에서 깨졌다.
+
+```
+Spring Batch 메타 테이블 위에서 Job이 실제로 실행된다 > Job이 COMPLETED로 끝나고 BATCH_JOB_EXECUTION에 기록이 남는다 FAILED
+    org.springframework.dao.EmptyResultDataAccessException at BatchJobExecutionTest.java:87
+```
+
+`assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED)`는 **통과했다.**
+바로 다음 줄의 `SELECT STATUS FROM BATCH_JOB_EXECUTION WHERE JOB_EXECUTION_ID = ?`가
+`Incorrect result size: expected 1, actual 0`으로 깨졌다. 예외도 경고 로그도 없었다.
+
+**진단**
+
+처음 의심한 것은 셋이었다.
+
+1. `execution.getId()`가 null이라 `WHERE ... = NULL`이 0행을 돌려준 것 — `javap`로
+   `org.springframework.batch.core.Entity.getId()`가 **primitive `long`**임을 확인해 기각했다.
+2. `JdbcTemplate`이 다른 DataSource를 본 것 — 컨텍스트는 클래스당 하나고 `@ServiceConnection`이
+   바꿔치기한 DataSource도 하나뿐이라 기각했다.
+3. 테이블 이름 대소문자 — 따옴표 없는 식별자는 PostgreSQL이 소문자로 접으므로 DDL과 조회가
+   같은 규칙을 탄다. 기각했다.
+
+셋이 다 아니면 **애초에 DB에 쓰이지 않은 것**이다. 그러면 JobRepository가 JDBC가 아니라는
+뜻이 된다. Boot 4의 `spring-boot-batch-4.0.8.jar`를 풀어 `BatchAutoConfiguration`을 보니
+내부 설정 클래스가 `DefaultBatchConfiguration`을 상속하고 있었다.
+
+```
+class org.springframework.boot.batch.autoconfigure.BatchAutoConfiguration$SpringBootBatchDefaultConfiguration
+    extends org.springframework.batch.core.configuration.support.DefaultBatchConfiguration
+```
+
+`spring-batch-core-6.0.5-sources.jar`에서 그 상위 클래스를 직접 열었다.
+
+```java
+93:	public JobRepository jobRepository() {
+94-		return new ResourcelessJobRepository();
+95-	}
+```
+
+**원인**
+
+Spring Batch 6.0에서 `DefaultBatchConfiguration#jobRepository()`의 기본값이
+`ResourcelessJobRepository`로 바뀌었다. 5.x에서는 `@EnableBatchProcessing`과 Boot 자동설정이
+컨텍스트의 `DataSource`를 보고 JDBC JobRepository를 만들어 줬다. 6.0은 JDBC 인프라를
+**별도 애노테이션 `@EnableJdbcJobRepository`(6.0 신규)로 명시해야** 한다.
+
+그래서 DataSource가 멀쩡히 있고, Flyway가 메타 테이블을 다 만들어 놓았고,
+`spring.batch.jdbc.initialize-schema: never`도 의도대로 설정돼 있는데,
+**배치 메타데이터는 메모리에만 남고 DB에는 한 줄도 쓰이지 않는다.** Job은 예외 없이
+`COMPLETED`로 끝나므로 로그만 봐서는 구별할 수 없다.
+
+이 상태로 넘어갔다면 T-042(예산 기간 전환)·T-043(크레딧 지급)에서 재시작·중복 실행 방지가
+전부 무력화된다. 메타데이터가 프로세스와 함께 사라지므로 "이미 돌았는지"를 아무도 모른다.
+테이블 6개는 영원히 비어 있는 채로 남는다.
+
+**해결**
+
+`src/main/java/com/petgyebu/telo/config/BatchConfig.java`를 추가했다.
+
+```java
+@Configuration
+@EnableBatchProcessing
+@EnableJdbcJobRepository
+public class BatchConfig {
+}
+```
+
+`@EnableJdbcJobRepository`는 `@EnableBatchProcessing`이 붙은 설정 클래스에 함께 써야 한다
+(애노테이션 javadoc 명시). 기본값대로 `dataSource`·`transactionManager`·`jdbcTemplate` 빈을
+쓰므로 다른 설정은 없다. 이 둘을 선언하면 Boot의 기본 배치 설정
+(`@ConditionalOnMissingBean(annotation = EnableBatchProcessing.class)`)은 물러난다.
+
+**검증**
+
+양방향으로 확인했다. 설정 추가 **전후**로 같은 테스트를 돌렸다.
+
+```
+--- BEFORE (BatchConfig 없음) ---
+4 tests completed, 1 failed
+  FAILED: Job이 COMPLETED로 끝나고 BATCH_JOB_EXECUTION에 기록이 남는다
+          EmptyResultDataAccessException: Incorrect result size: expected 1, actual 0
+          ← Job 상태 단언은 통과한 뒤 DB 조회에서 깨졌다
+
+--- AFTER (@EnableBatchProcessing + @EnableJdbcJobRepository) ---
+BUILD SUCCESSFUL in 11s   (BatchSchemaSourceTest, BatchJobExecutionTest,
+                           PostgresMigrationTest, TeloApplicationTests)
+```
+
+DB에 실제로 쓰였는지는 인메모리 객체가 아니라 세 질의로 못 박았다 —
+`BATCH_JOB_EXECUTION.STATUS = 'COMPLETED'`, `BATCH_JOB_INSTANCE.JOB_NAME`,
+`BATCH_STEP_EXECUTION`의 완료 스텝 1건. 마지막 것이 `BATCH_STEP_EXECUTION_SEQ`까지
+살아 있다는 증거를 겸한다.
+
+**배운 것**
+
+**"DataSource가 있으니 JDBC로 갈 것"은 5.x의 기억이다.** 메이저 버전 전환에서 바뀌는 것은
+좌표와 패키지만이 아니라 **자동설정의 기본값**이고, 기본값이 바뀌면 에러가 아니라 침묵이 나온다.
+
+그리고 이번 Task의 완료 기준이 "테이블 6개가 만들어진다"에서 멈췄다면 **이 문제를 통과시켰을
+것이다.** 테이블은 정확히 만들어져 있었다. `PostgresMigrationTest`도, 원본 일치 테스트도
+전부 초록불이었다. 잡은 것은 "Job을 실제로 돌리고 그 기록이 DB에 남는지 본다"는 단 하나의
+단언이다. **산출물의 존재가 아니라 산출물이 쓰이는 것을 확인해야 한다.**
+
+**덧 — 같은 교훈이 같은 커밋 안에서 한 번 더 필요했다 (QA 지적)**
+
+위 교훈을 적어 놓고도, 이 커밋의 주석 두 곳에 **Boot 4.0에 존재하지 않는 속성**을 근거로 적었다.
+
+```
+V202609221408__create_spring_batch_metadata.sql:14
+BatchConfig.java:23
+  → "spring.batch.jdbc.initialize-schema: never 라서 Flyway가 만든다"
+```
+
+QA가 확인한 사실은 이렇다.
+
+```
+$ javap -p .../boot/batch/autoconfigure/BatchProperties.class
+  private final org.springframework.boot.batch.autoconfigure.BatchProperties$Job job;   ← job 하나뿐
+$ unzip -p spring-boot-batch-4.0.8.jar META-INF/spring-configuration-metadata.json
+  ['spring.batch.job.enabled', 'spring.batch.job.name']                                 ← 이게 전부
+$ spring-boot*-4.0.8.jar 전체 문자열에서 "batch.jdbc.initialize-schema" 검색 → 0건
+```
+
+재현해 보니 그대로였다. Boot 3.x의 `spring.batch.jdbc.initialize-schema`와 그것을 읽던 초기화기는
+**4.0에 없다.** 동작상 피해는 없다 — Boot 4는 배치 스키마를 아예 자동 생성하지 않으므로
+Flyway 소유가 그대로 유지된다. **틀린 것은 결과가 아니라 근거다.** 없는 속성을 방어선으로 적어
+두면 다음 사람이 "이 설정이 막아 주니 안전하다"고 믿는다. 진짜 근거는 "Boot 4.0에는 배치 스키마
+자동 생성기가 없다"이다.
+
+죽은 속성은 이미 **네 군데**로 번져 있었다. `application.yaml:28`과 `docs/05-infra-stack.md:137`은
+Sprint 0에서 들어온 것이고, 이번 커밋의 주석 둘이 그 서술을 그대로 옮겨 적으면서 둘이 더 늘었다.
+T-040에서 새로 생긴 주석 두 곳만 정정했다. 앞의 둘은 이 Task의 소산이 아니라 별도 Task로 등록됐다.
+
+**이 항목의 교훈이 자기 자신에게 적용되지 않았다.** 자동설정 기본값은 `javap`와
+`spring-configuration-metadata.json`으로 확인했으면서, 설정 **속성**의 존재는 입력 문서에 적혀
+있다는 이유로 확인하지 않고 옮겼다. 같은 확인 방법이 둘 다에 쓸 수 있었다.
+"5.x의 기억으로 기본값을 넘겨짚지 마라"는 **속성 이름에도 똑같이 적용된다.**
+"문서에 적혀 있다"는 그 속성이 존재한다는 증거가 아니다.
+
+---
+
 ## 되짚어 보기
 
 ### 조용한 실패가 가장 많았다
 
-21건 중 9건(3·4·9·10·11·17·18·19·20번)이 **빌드도 기동도 성공하는데 기능만 비어 있는** 유형이었다.
+22건 중 10건(3·4·9·10·11·17·18·19·20·22번)이 **빌드도 기동도 성공하는데 기능만 비어 있는** 유형이었다.
 
 | 사례 | 겉보기 | 실제 |
 |---|---|---|
@@ -1399,6 +1547,7 @@ DB 보장과 섞는 순간 "동작으로 구별 불가"라는 잘못된 결론�
 | `NOT NULL` 누락 | 빌드 통과, `validate` 통과, 스키마 테스트 9건 전부 통과 | 열이 null을 받는다 |
 | CHECK 값 제거·통째 삭제, `VARCHAR` 길이 변경 | 빌드 통과, 스키마 테스트 76건 전부 통과 | 애플 로그인·계좌 해제·기간 종료가 막히고, CHECK가 없어도 아무도 모른다 |
 | 엔티티 생성자 변이 | 빌드 통과, DB 제약 변이 12종을 잡는 스키마 테스트 33건 전부 통과 | 구매 즉시 아이템이 배치되고, 보상 판정 근거 두 값이 거꾸로 저장된다 |
+| Spring Batch 6.0 기본 JobRepository | Job이 `COMPLETED`로 종료, 예외·경고 0줄 | 메타 테이블 6개가 영원히 비어 있고 재시작·중복 실행 방지가 무력화된다 |
 
 공통점이 있다. **성공 신호가 있어서 더 위험하다.** 에러가 나면 고치게 되지만 이들은 "잘 되고 있다"는 잘못된 확신을 준다.
 
@@ -1419,12 +1568,14 @@ DB 보장과 섞는 순간 "동작으로 구별 불가"라는 잘못된 결론�
 - 부분 유니크 인덱스: 조건을 빼는 변이와 유니크를 빼는 변이가 **서로 다른 테스트**에 걸리는지
 - 엔티티 경로 단언: QA가 미검출로 보고한 엔티티 변이 둘을 단언 추가 **전후**로 한 번씩 돌려, 전에는 `failures=0`이고 후에는 깨지는지
 - 푸시 스키마: 변이 14종(유니크 5, CHECK 1, FK 3, `NOT NULL` 1, 인덱스 1, 엔티티 3)을 하나씩 넣고 원복해, 각각 **어느 테스트가** 깨지는지까지 확인. 유니크에 열을 *더하는* 변이만 동작 단언 셋을 통과하고 구조 단언에만 걸렸는데, QA가 **네 번째 방향의 프로브**(같은 기간을 다른 `user_id`로)를 넣어 동작으로도 구별된다는 것을 보였다. 단언 추가 전후로 같은 변이를 돌려 `failures=1 → 2`를 확인했다(21번)
+- Spring Batch 메타 스키마: 컬럼 이름 변이 둘(`JOB_NAME`→`JOB_TITLE`, `EXIT_MESSAGE`→`EXIT_MSG`)과 시퀀스 삭제 변이 하나를 넣고 원복해, **원본 일치 테스트와 Job 실행 테스트가 각각 어디서** 깨지는지 확인. `PostgresMigrationTest`는 DDL이 통과하는 변이를 전혀 잡지 못한다(22번)
+- JDBC JobRepository 설정: `BatchConfig` 추가 **전후**로 같은 테스트를 돌려, 전에는 Job이 `COMPLETED`인데 `BATCH_JOB_EXECUTION`이 0행이고 후에는 통과하는지(22번)
 
 통과만 확인하면 "원래부터 통과했을" 가능성을 배제할 수 없다. **막으려던 것이 실제로 막히는지 확인해야 그 방어가 작동한다고 말할 수 있다.**
 
 ### 메이저 버전 전환의 비용은 좌표에서 나온다
 
-Java 25 + Spring Boot 4.0 조합에서 좌표·패키지 문제가 네 번 나왔다(1·2·4·5번). 코드 문법이 아니라 **"어떤 아티팩트를 어떤 이름으로 가져오는가"**에서 깨졌다.
+Java 25 + Spring Boot 4.0 조합에서 좌표·패키지·기본값 문제가 다섯 번 나왔다(1·2·4·5·22번). 코드 문법이 아니라 **"어떤 아티팩트를 어떤 이름으로 가져오는가"**, 그리고 **"자동설정이 무엇을 기본값으로 주는가"**에서 깨졌다.
 
 관례적인 좌표를 그대로 쓰면 실패하거나, 더 나쁘게는 조용히 동작하지 않는다. 의존성을 추가할 때마다 Maven Central에서 실제 좌표를 확인하는 편이 결과적으로 빨랐다.
 

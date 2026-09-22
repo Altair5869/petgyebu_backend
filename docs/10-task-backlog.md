@@ -133,7 +133,7 @@ chore/{슬러그}               F-ID 없는 인프라·기술 부채
 
 | | ID | 제목 | 브랜치 | 완료 기준 | 의존 | 차단 |
 |---|---|---|---|---|---|---|
-| [ ] | T-040 | Spring Batch 메타 테이블 마이그레이션 | `chore/batch-schema` | `schema-postgresql.sql`을 마이그레이션으로 옮긴다. **직접 작성하지 않는다** | T-023 | — |
+| [x] | T-040 | Spring Batch 메타 테이블 마이그레이션 | `chore/batch-schema` | ✅ 완료. QA PASS 10 / FIX 2 / REDO 0. 원본 바이트 일치 + 배치 실행까지 검증 | T-023 | #23 |
 | [x] | T-041 | 보상·상점 스키마와 시드 | `feature/F-HPWCNJ-schema` | ✅ 완료. QA PASS 14 / FIX 3 / REDO 0. `shop_items` 시드는 아이템 목록·에셋이 확정되지 않아 T-044로 미뤘다 | T-023 | #21 |
 | [ ] | T-042 | s9 예산 기간 전환 배치 | `feature/F-FZUVLV-period-batch` | 매일 KST 00:05 실행. 기간 종료→새 기간 생성→상태 재계산이 **단일 트랜잭션**. 중간 실패 시 전부 롤백되는 것을 확인 | T-026, T-040 | — |
 | [ ] | T-043 | 절약 조건 판정과 크레딧 지급 | `feature/F-EZZFNU-reward` | 스냅샷 기준 판정. 10% 이상 감소 조건. 첫 기간은 비교 조건 생략. 중복 지급이 유니크 제약으로 막힌다. `SELECT FOR UPDATE` 확인 | T-041, T-042 | — |
@@ -258,3 +258,25 @@ T-031의 완료 기준 2는 유니크를 동작 **세 방향**으로 확인하�
 당시 "동작으로는 고정할 수 없고 구조 단언이 유일한 방어선"이라고 결론지었으나 **틀렸다.** QA가 프로브(같은 기간·같은 임계값을 다른 `user_id`로 삽입)를 넣어 반증했다 — `push_logs`에 두 FK의 일치를 강제하는 복합 FK가 없어 그런 행을 만들 수 있고, 2열과 3열은 동작으로 구별된다. 열거된 세 방향이 부족했던 것뿐이다.
 
 **구조 단언 하나만 걸렸다면 동작 단언을 더 만들라는 신호다.** 그리고 "그런 상태는 만들 수 없다"를 주장하려면 실제로 만들어 보고 거부당하는 것을 확인해야 한다. 애플리케이션 의미를 DB 보장으로 넘겨짚지 마라. 상세는 트러블슈팅 21번.
+
+### 신규 Task: 죽은 설정 속성 제거 (2026-09-22, T-040 QA에서 발견)
+
+`spring.batch.jdbc.initialize-schema: never`가 **Boot 4.0에 없는 속성이다.** Boot 3.x에는 있었으나 4.0에서 사라졌다.
+
+QA가 확인한 방법:
+```
+javap -p .../boot/batch/autoconfigure/BatchProperties.class   → job 하나뿐, jdbc 없음
+spring-boot-batch-4.0.8.jar의 spring-configuration-metadata.json
+  → spring.batch.job.enabled, spring.batch.job.name 이 전부
+spring-boot*-4.0.8.jar 전체에서 Batch…Initializer 클래스 검색 → 0건
+```
+
+**동작상 피해는 없다.** Boot 4는 배치 스키마를 자동 생성하지 않으므로 Flyway 소유가 그대로 유지된다. 문제는 **근거가 틀렸다는 것**이다. 없는 속성을 방어선으로 적어 두면 나중에 "이 설정이 막아 주니 안전하다"고 믿게 된다.
+
+남은 곳 둘:
+- `src/main/resources/application.yaml:28` — 속성 자체
+- `docs/05-infra-stack.md:137` — 같은 서술
+
+T-040에서 마이그레이션 주석과 `BatchConfig` javadoc 두 곳은 정정했다. 위 둘은 Sprint 0 소산이라 T-040 범위 밖으로 두었다.
+
+**함께 볼 것**: Sprint 0에서 들어온 다른 설정 속성도 Boot 4.0에 실재하는지 같은 방법으로 훑는다. 이 속성 하나가 네 군데로 번져 있었던 것처럼, 5.x·3.x의 기억으로 적은 것이 더 있을 수 있다. 상세는 트러블슈팅 22번.
