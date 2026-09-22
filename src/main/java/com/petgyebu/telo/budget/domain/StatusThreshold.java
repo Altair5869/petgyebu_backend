@@ -1,5 +1,6 @@
 package com.petgyebu.telo.budget.domain;
 
+import com.petgyebu.telo.common.time.AppZone;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -10,6 +11,7 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
+import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
@@ -71,5 +73,17 @@ public class StatusThreshold {
 		this.endRate = endRate;
 		this.sortOrder = sortOrder;
 		this.updatedAt = Objects.requireNonNull(updatedAt, "updatedAt");
+	}
+
+	/**
+	 * `updated_at`을 갱신한다. DB의 {@code DEFAULT now()}는 INSERT에만 발화하므로
+	 * 이 콜백이 없으면 수정 경로가 생기는 순간 값이 생성 시각에 고정된다.
+	 *
+	 * <p>시각은 {@link AppZone#clock()}에서 얻는다. KST 단일 출처 규칙이다(T-052).
+	 * JPA를 지나가는 수정만 덮는다 — 벌크 UPDATE나 raw SQL은 이 콜백을 타지 않는다.
+	 */
+	@PreUpdate
+	void onUpdate() {
+		this.updatedAt = OffsetDateTime.now(AppZone.clock());
 	}
 }
