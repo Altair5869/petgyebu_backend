@@ -201,6 +201,9 @@ class SyncAttemptSchemaTest {
 		// 수집 성공률 95% 지표 집계용.
 		assertIndex("sync_attempts", "ix_sync_attempts_trigger_type_attempted_at", "btree",
 				"trigger_type, attempted_at", null);
+		// FK 자식 컬럼 인덱스. 탈퇴 시 users -> sync_attempts CASCADE에서 스캔된다.
+		// 위 두 인덱스는 account_id·trigger_type이 선행이라 user_id를 덮지 않는다.
+		assertIndex("sync_attempts", "ix_sync_attempts_user_id", "btree", "user_id", null);
 	}
 
 	@Test

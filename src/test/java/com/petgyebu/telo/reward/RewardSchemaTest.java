@@ -343,6 +343,10 @@ class RewardSchemaTest {
 		assertIndex("credit_balances", "credit_balances_pkey", "btree", "user_id", null);
 		assertIndex("reward_grants", "uq_reward_grants_user_period_condition", "btree",
 				"user_id, budget_period_id, condition_type", null);
+		// FK 자식 컬럼 인덱스. 예산 기간 삭제마다 스캔되며 탈퇴 시 기간 수만큼 반복된다.
+		// 위 유니크는 user_id가 선행이라 budget_period_id를 덮지 않는다.
+		assertIndex("reward_grants", "ix_reward_grants_budget_period_id", "btree",
+				"budget_period_id", null);
 	}
 
 	@Test

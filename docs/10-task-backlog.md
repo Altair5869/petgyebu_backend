@@ -61,7 +61,7 @@ chore/{슬러그}               F-ID 없는 인프라·기술 부채
 | [x] | T-006 | `accounts` 스키마와 엔티티 | `feature/F-TEDWWF-schema` | ✅ 완료. QA PASS 11 / FIX 1 / REDO 0 | T-001 | #18 |
 | [ ] | T-007 | 금융 데이터 조회 동의 API | `feature/F-TEDWWF-consent` | 동의 없이 계좌 연결을 시작할 수 없다. 가입 시 동의와 분리 기록된다 | T-004, T-006 | — |
 | [ ] | T-008 | 코드에프 SDK 연동 골격 (SANDBOX) | `feature/F-TEDWWF-codef-client` | SANDBOX 자격증명으로 API 호출이 왕복한다. `EasyCodefUtil.encryptRSA()` 사용 경로 확인 | T-006 | — |
-| [ ] | T-009 | 계좌 연결 시작·2-way 추가인증 콜백 | `feature/F-TEDWWF-connect` | 인증 성공 시 코드에프가 반환한 계좌 목록 **전체가 배열로** 저장된다. 2-way 상태가 Upstash에 TTL로 저장된다 | T-008 | **B-CODEF**, **B-REDIS**. T-006에서 `accounts` 상태 전이 메서드(`EXPIRED`·`REVOKED`·재인증·집계 제외)와 `updated_at` 갱신 수단을 미결로 넘겼다. |
+| [ ] | T-009 | 계좌 연결 시작·2-way 추가인증 콜백 | `feature/F-TEDWWF-connect` | 인증 성공 시 코드에프가 반환한 계좌 목록 **전체가 배열로** 저장된다. 2-way 상태가 Upstash에 TTL로 저장된다 | T-008 | **B-CODEF**, **B-REDIS**. T-006에서 `accounts` 상태 전이 메서드(`EXPIRED`·`REVOKED`·재인증·집계 제외)를 미결로 넘겼다. `updated_at` 갱신은 2026-09-22에 `@PreUpdate`로 해결됐다. |
 | [ ] | T-010 | 계좌 목록·해제 API | `feature/F-TEDWWF-manage` | 해제 후 동기화 대상에서 빠진다. 해제 시 connectedId가 해지된다 | T-009 | `included_in_budget = TRUE`인데 `display_mode = 'HIDDEN'`인 행이 존재할 수 있다(T-006에서 DB 제약으로 표현하지 않기로 함). 읽는 쪽이 무시해야 한다 |
 | [ ] | T-011 | 재인증 필요 상태와 사용자 유도 | `feature/F-TEDWWF-reauth` | 동의 만료·인증 실패 시 `reauth_required`가 켜지고 목록 응답에 노출된다 | T-010 | — |
 | [ ] | T-012 | 탈퇴 시 connectedId 해지 연동 | `chore/withdrawal-codef-revoke` | 탈퇴 시 연결된 모든 계좌가 해지된다. 해지 실패해도 삭제는 진행되고 실패 건이 기록된다 | T-005, T-010 | — |
@@ -76,7 +76,7 @@ chore/{슬러그}               F-ID 없는 인프라·기술 부채
 |---|---|---|---|---|---|---|
 | [x] | T-013 | `categories`·`merchant_keyword_rules` 스키마와 시드 | `feature/F-OAVYWT-category-schema` | ✅ 완료. QA PASS 12 / FIX 2 / REDO 0. 키워드 룰 시드는 목록이 확정되지 않아 T-019로 미뤘다 | T-001 | #19 |
 | [x] | T-014 | `transactions`·`transfer_links`·`sync_attempts` 스키마와 엔티티 | `feature/F-OAVYWT-schema` | ✅ 완료. QA PASS 13 / FIX 3 / REDO 0 | T-006, T-013 | #20 |
-| [ ] | T-015 | 코드에프 거래 조회 연동과 90일 페이지네이션 | `feature/F-OAVYWT-fetch` | 90일치가 페이지 단위 순차 호출로 전부 수집된다. 단일 호출로 안 채워지는 경우를 재현해 확인 | T-008, T-014 | **B-CODEF**. T-006에서 `accounts` 상태 전이 메서드(`EXPIRED`·`REVOKED`·재인증·집계 제외)와 `updated_at` 갱신 수단을 미결로 넘겼다. |
+| [ ] | T-015 | 코드에프 거래 조회 연동과 90일 페이지네이션 | `feature/F-OAVYWT-fetch` | 90일치가 페이지 단위 순차 호출로 전부 수집된다. 단일 호출로 안 채워지는 경우를 재현해 확인 | T-008, T-014 | **B-CODEF**. T-006에서 `accounts` 상태 전이 메서드(`EXPIRED`·`REVOKED`·재인증·집계 제외)를 미결로 넘겼다. `updated_at` 갱신은 2026-09-22에 `@PreUpdate`로 해결됐다. |
 | [ ] | T-016 | 중복 거래 판정과 저장 | `feature/F-OAVYWT-dedup` | 같은 거래를 두 번 수집해도 행이 늘지 않는다. 유니크 제약 위반이 정상 처리된다 | T-015 | — |
 | [ ] | T-017 | 이체 후보 매칭 함수 | `feature/F-OAVYWT-transfer-match` | 조건 3개(금액 완전 일치 + 10분 이내 + 연결된 계좌 쌍)를 AND로 검사한다. 하나의 출금에 여러 입금이 대응하면 자동 연결하지 않는다. **F-KBBFRU에서 재사용 가능한 형태로 분리** | T-016 | — |
 | [ ] | T-018 | 환불 순액 처리 | `feature/F-OAVYWT-refund` | 원거래와 환불이 각각 행으로 저장되고 연결된다. 집계 시 순액이 반영된다 | T-016 | — |
@@ -93,10 +93,11 @@ chore/{슬러그}               F-ID 없는 인프라·기술 부채
 |---|---|---|---|---|---|---|
 | [x] | T-023 | `budget_periods`·`status_thresholds` 스키마와 엔티티 | `feature/F-FZUVLV-schema` | ✅ 완료. QA PASS 9 / FIX 1 / REDO 0 | T-001 | #16 |
 | [ ] | T-024 | **소비 지출 집계 함수 (공통)** | `feature/F-FZUVLV-expense-aggregation` | 이체 제외·환불 순액·가계부 제외 계좌 제외가 모두 반영된다. **예산·캐릭터 상태·소비 요약·카테고리 분석이 전부 이 함수를 쓴다** | T-018, T-022 | — |
-| [ ] | T-025 | 예산 설정 API와 구간 검증 | `feature/F-FZUVLV-api` | 0% 고정·오름차순·중복·공백·6단계 누락 검증이 각각 해당 행을 지목하며 저장을 막는다. 기본값 6단계가 프리필된다 | T-023 | `updated_at` 자동 갱신 수단(`@PreUpdate` vs Auditing)을 T-023에서 미결로 넘겼다. 목표 금액 수정 API가 생기는 순간 정해야 한다 |
+| [ ] | T-025 | 예산 설정 API와 구간 검증 | `feature/F-FZUVLV-api` | 0% 고정·오름차순·중복·공백·6단계 누락 검증이 각각 해당 행을 지목하며 저장을 막는다. 기본값 6단계가 프리필된다 | T-023 | `updated_at` 갱신은 2026-09-22에 `@PreUpdate`로 해결됐다. 벌크 UPDATE·raw SQL은 콜백을 타지 않으므로 그런 경로를 만들면 직접 대입해야 한다 |
 | [ ] | T-026 | 사용률 계산과 경계값 판정 | `feature/F-FZUVLV-usage-rate` | 오른쪽 닫힘 `(시작, 끝]` 판정. **40%는 "기상"이 아니라 "휴식"**, 0%는 첫 구간에 포함. 목표 수정 시 스냅샷은 불변 | T-024, T-025 | — |
 | [ ] | T-027 | 캐릭터 선택 API | `feature/F-GGIDHG-api` | 선택·변경이 저장되고 변경 시각이 남는다 | T-001 | — |
-| [ ] | T-028 | 거래 분류·유형 수정 API와 이력 | `feature/F-KBBFRU-edit` | 수정이 집계에 즉시 반영된다. **`initial_classification_source`는 갱신되지 않는다**(`updatable = false` 확인) | T-022, T-024 | — |
+| [ ] | T-028a | `transaction_edit_histories` 스키마와 엔티티 | `feature/F-KBBFRU-history-schema` | 마이그레이션 적용. `(transaction_id, edited_at DESC)` 인덱스. **설계 17개 테이블 중 유일하게 전용 스키마 Task가 없던 것** (2026-09-22 전체 검토에서 발견). 검증 축 7가지 + FK 자식 컬럼 인덱스 적용 | T-014 | — |
+| [ ] | T-028 | 거래 분류·유형 수정 API와 이력 | `feature/F-KBBFRU-edit` | 수정이 집계에 즉시 반영된다. **`initial_classification_source`는 갱신되지 않는다**(`updatable = false` 확인) | T-022, T-024, T-028a | — |
 | [ ] | T-029 | 이체 확인·연결 해제 API | `feature/F-KBBFRU-transfer` | T-017의 매칭 함수를 재사용한다. 해제 시 원래 수입·지출 유형으로 재계산된다 | T-017, T-028 | — |
 | [ ] | T-030 | 계좌 가계부 포함·제외 토글 API | `feature/F-KBBFRU-account-toggle` | 제외 시 집계에서 빠지고, "완전히 숨김"이면 목록에서도 사라진다 | T-022, T-024 | — |
 
@@ -215,6 +216,7 @@ chore/{슬러그}               F-ID 없는 인프라·기술 부채
 | `CHECK` | 13 | 허용 케이스 + 거부 케이스 + 제약 이름 |
 | `UNIQUE` | 11 | 거부 + 허용 + 제약 이름 |
 | `VARCHAR` 길이 | 17 | `character_maximum_length` |
+| **FK 자식 컬럼 인덱스** | 4 | `pg_indexes` (2026-09-22 추가) |
 
 **단언하지 않기로 한 것** — 근거를 남긴다. 나중에 "왜 안 했지"가 나오지 않게 하기 위함이다.
 
@@ -223,6 +225,16 @@ chore/{슬러그}               F-ID 없는 인프라·기술 부채
 | `GENERATED ALWAYS AS IDENTITY` | 8 | **자가 검출된다.** identity를 떼면 `id` 없는 INSERT가 null 위반으로 죽어 기존 테스트가 잡는다. `categories`만 반대 방향(identity가 *붙는* 것)이라 별도 단언이 필요했고 `CategorySchemaTest`에 이미 있다 |
 | `PRIMARY KEY` | 10 | 실질 위험은 명시적 ID를 쓰는 `categories`뿐이다. 나머지는 identity가 값을 만들어 중복이 생기지 않는다 |
 | `DEFAULT` | 18 | 애플리케이션 경로에서 엔티티가 항상 값을 채워 DEFAULT가 발화하지 않는다. 실사용처가 있는 `transactions.category_id DEFAULT 99`만 예외로 이미 단언돼 있다. raw SQL이나 배치 INSERT가 생기면 그때 재검토한다 |
+
+**FK 자식 컬럼 인덱스 (2026-09-22 추가)**
+
+PostgreSQL은 FK의 자식 컬럼에 인덱스를 자동으로 만들지 않는다. 부모를 지울 때마다 자식 테이블을 전체 스캔한다. 실측으로 거래 2000건 삭제가 3,005ms ↔ 8ms(363배)였고, 배경 데이터에 선형으로 늘어난다. 상세는 트러블슈팅 23번, 원칙은 `docs/09-db-design.md` 0장.
+
+**부모 삭제가 실제로 일어나는 FK만** 대상이다. 참조 테이블(`categories`·`shop_items`)을 가리키는 FK는 제외한다 — 인덱스에는 쓰기 비용이 있다.
+
+복합 인덱스가 덮는지는 **선행 열**로 판단한다. `UNIQUE (user_id, budget_period_id, ...)`는 `user_id`만 덮는다.
+
+**이 구멍은 설계 문서가 빠뜨린 것이라 기존 인덱스 단언(축 3)이 잡지 못했다.** 그 축은 "설계에 있는 인덱스가 실제로 있는가"를 본다. 설계가 틀리면 단언도 함께 틀린다. 그래서 개별 Task 검토가 아니라 일곱 Task가 끝난 뒤 가로지르는 축으로 다시 훑어야 나왔다.
 
 **앞으로 스키마 Task를 할 때**: 위 "덮인 축" 6가지를 처음부터 전부 넣는다. 각 Task 입력 명세에 이 표를 옮겨 적는다. 그리고 **같은 제약이 두 컬럼에 걸려 있으면 양쪽을 각각 확인한다** — 한쪽만 보면 다른 쪽이 통째로 비어도 통과한다.
 
