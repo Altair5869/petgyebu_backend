@@ -20,7 +20,9 @@ import org.springframework.context.annotation.Configuration;
  * ({@code @ConditionalOnMissingBean(annotation = EnableBatchProcessing.class)})은 물러난다.
  *
  * <p>기본값대로 {@code dataSource}·{@code transactionManager}·{@code jdbcTemplate} 빈을 쓴다.
- * 테이블은 Flyway가 만든다({@code spring.batch.jdbc.initialize-schema: never}).
+ * 테이블은 Flyway가 만든다. Spring Boot 4.0에는 배치 스키마를 자동 생성하는 초기화기가 없다
+ * — Boot 3.x의 {@code spring.batch.jdbc.initialize-schema}는 4.0에서 사라졌으므로 그 속성을
+ * 근거로 삼지 마라. 마이그레이션은 {@code V202609221408__create_spring_batch_metadata.sql}이다.
  */
 @Configuration
 @EnableBatchProcessing

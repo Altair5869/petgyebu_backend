@@ -11,7 +11,10 @@
 -- CREATE SEQUENCE vs identity, CHECK 제약 없음, CHAR(1)). 전부 의도한 것이다.
 -- 프레임워크(JdbcJobRepository)가 이 모양을 그대로 기대하므로 우리 관례에 맞추면 배치가 깨진다.
 --
--- spring.batch.jdbc.initialize-schema: never (application.yaml) — 이 스키마는 Flyway가 만든다.
+-- 이 스키마는 Flyway가 만든다. Spring Boot 4.0에는 배치 스키마를 자동 생성하는 초기화기가
+-- 아예 없다(BatchProperties에 job 하나뿐이고, 설정 메타데이터의 spring.batch.* 속성은
+-- job.enabled와 job.name 둘뿐이다). Boot 3.x의 spring.batch.jdbc.initialize-schema는
+-- 4.0에서 사라졌으므로 그 속성을 근거로 삼지 마라 — 11-troubleshooting-log.md 22번 참고.
 --
 -- 버전을 올릴 때: 새 jar에서 같은 경로를 다시 추출해 마커 아래를 통째로 교체하고,
 -- 위 sha256도 새 값으로 갱신한다. BatchSchemaSourceTest가 마커 아래 바이트를

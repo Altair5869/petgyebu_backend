@@ -1492,6 +1492,42 @@ DB에 실제로 쓰였는지는 인메모리 객체가 아니라 세 질의로 �
 전부 초록불이었다. 잡은 것은 "Job을 실제로 돌리고 그 기록이 DB에 남는지 본다"는 단 하나의
 단언이다. **산출물의 존재가 아니라 산출물이 쓰이는 것을 확인해야 한다.**
 
+**덧 — 같은 교훈이 같은 커밋 안에서 한 번 더 필요했다 (QA 지적)**
+
+위 교훈을 적어 놓고도, 이 커밋의 주석 두 곳에 **Boot 4.0에 존재하지 않는 속성**을 근거로 적었다.
+
+```
+V202609221408__create_spring_batch_metadata.sql:14
+BatchConfig.java:23
+  → "spring.batch.jdbc.initialize-schema: never 라서 Flyway가 만든다"
+```
+
+QA가 확인한 사실은 이렇다.
+
+```
+$ javap -p .../boot/batch/autoconfigure/BatchProperties.class
+  private final org.springframework.boot.batch.autoconfigure.BatchProperties$Job job;   ← job 하나뿐
+$ unzip -p spring-boot-batch-4.0.8.jar META-INF/spring-configuration-metadata.json
+  ['spring.batch.job.enabled', 'spring.batch.job.name']                                 ← 이게 전부
+$ spring-boot*-4.0.8.jar 전체 문자열에서 "batch.jdbc.initialize-schema" 검색 → 0건
+```
+
+재현해 보니 그대로였다. Boot 3.x의 `spring.batch.jdbc.initialize-schema`와 그것을 읽던 초기화기는
+**4.0에 없다.** 동작상 피해는 없다 — Boot 4는 배치 스키마를 아예 자동 생성하지 않으므로
+Flyway 소유가 그대로 유지된다. **틀린 것은 결과가 아니라 근거다.** 없는 속성을 방어선으로 적어
+두면 다음 사람이 "이 설정이 막아 주니 안전하다"고 믿는다. 진짜 근거는 "Boot 4.0에는 배치 스키마
+자동 생성기가 없다"이다.
+
+죽은 속성은 이미 **네 군데**로 번져 있었다. `application.yaml:28`과 `docs/05-infra-stack.md:137`은
+Sprint 0에서 들어온 것이고, 이번 커밋의 주석 둘이 그 서술을 그대로 옮겨 적으면서 둘이 더 늘었다.
+T-040에서 새로 생긴 주석 두 곳만 정정했다. 앞의 둘은 이 Task의 소산이 아니라 별도 Task로 등록됐다.
+
+**이 항목의 교훈이 자기 자신에게 적용되지 않았다.** 자동설정 기본값은 `javap`와
+`spring-configuration-metadata.json`으로 확인했으면서, 설정 **속성**의 존재는 입력 문서에 적혀
+있다는 이유로 확인하지 않고 옮겼다. 같은 확인 방법이 둘 다에 쓸 수 있었다.
+"5.x의 기억으로 기본값을 넘겨짚지 마라"는 **속성 이름에도 똑같이 적용된다.**
+"문서에 적혀 있다"는 그 속성이 존재한다는 증거가 아니다.
+
 ---
 
 ## 되짚어 보기
