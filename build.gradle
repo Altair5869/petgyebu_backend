@@ -96,4 +96,10 @@ tasks.named('test') {
 	// 개발자 노트북에서도 CI에서도 통과해 버린다. 존을 명시하지 않은 코드는 여기서 깨져야 한다.
 	// 기준 존이 필요한 곳은 AppZone.KST를 쓴다.
 	systemProperty 'user.timezone', 'UTC'
+
+	// 액세스 토큰 서명 키. application.yaml은 기본값 없이 ${TELO_ACCESS_TOKEN_SECRET}만 두어
+	// 주입을 빠뜨리면 기동이 실패하게 해뒀다(공개된 기본 키로 조용히 도는 것을 막는다).
+	// 프로필을 지정하지 않는 테스트(스키마 테스트 등)도 그 base 설정을 읽으므로 여기서
+	// 운영과 같은 경로인 환경변수로 넣어준다. 테스트 전용 더미 값이다.
+	environment 'TELO_ACCESS_TOKEN_SECRET', 'test-only-dummy-hs256-signing-key-32b+'
 }

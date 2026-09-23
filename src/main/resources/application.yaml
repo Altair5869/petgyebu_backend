@@ -26,3 +26,11 @@ spring:
       # BATCH_* 메타 테이블도 Flyway로 관리한다. 근거는
       # _workspace/sprint0_backend_summary.md 15장 참고.
       initialize-schema: never
+
+telo:
+  auth:
+    # 액세스 토큰 HS256 서명 키. 코드에 두지 않고 환경변수로만 넣는다.
+    # 기본값을 일부러 주지 않는다 — 값이 없으면 기동이 실패해야 한다. 기본값을 두면 운영에
+    # 주입을 빠뜨렸을 때 아무 경고 없이 공개된 키로 토큰을 찍어내게 된다.
+    # HS256은 256비트 이상을 요구하므로 UTF-8 기준 32바이트 이상이어야 한다.
+    access-token-secret: ${TELO_ACCESS_TOKEN_SECRET}
