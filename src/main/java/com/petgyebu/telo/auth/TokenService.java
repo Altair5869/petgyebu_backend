@@ -2,6 +2,7 @@ package com.petgyebu.telo.auth;
 
 import com.petgyebu.telo.user.domain.User;
 import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jws;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.MalformedJwtException;
@@ -77,16 +78,26 @@ public class TokenService {
 	 * @throws JwtException 서명이 맞지 않거나 만료됐거나 형식이 깨졌을 때
 	 */
 	public Long parseUserId(String token) {
-		Claims claims = Jwts.parser()
+		Jws<Claims> jws = Jwts.parser()
 				.verifyWith(signingKey)
 				// 파서의 기본 시계는 System.currentTimeMillis()라 주입받은 시계를 무시한다.
 				// 넘기지 않으면 고정 시계를 앞당겨도 만료가 재현되지 않는다.
 				.clock(() -> Date.from(clock.instant()))
 				.build()
-				.parseSignedClaims(token)
-				.getPayload();
+				.parseSignedClaims(token);
 
-		String subject = claims.getSubject();
+		// 파서는 헤더의 alg를 그대로 믿는다. 같은 비밀키로 HS384·HS512로 서명한 토큰도
+		// 통과한다. 발급은 HS256만 하므로 검증도 HS256으로 좁힌다.
+		//
+		// 지금 키가 32바이트라 HS384 서명은 길이 제약에 우연히 걸리지만, 권장대로 키를
+		// 64바이트로 늘리는 순간 그 우연이 사라진다. 키를 모르면 위조는 어차피 불가능하니
+		// 심층방어다 — 우연에 기대는 방어선을 의도한 방어선으로 바꾼다.
+		String algorithm = jws.getHeader().getAlgorithm();
+		if (!Jwts.SIG.HS256.getId().equals(algorithm)) {
+			throw new MalformedJwtException("HS256으로 서명되지 않은 토큰이다: " + algorithm);
+		}
+
+		String subject = jws.getPayload().getSubject();
 		try {
 			return Long.valueOf(subject);
 		} catch (NumberFormatException e) {

@@ -102,6 +102,7 @@ T-003의 리프레시 회전·폐기 토큰 재사용 감지는 폐기 상태 �
 | 예외 처리 | `@RestControllerAdvice` 하나를 `common`에 둔다. 도메인 예외 → `ProblemDetail` 변환 |
 | 검증 위치 | 단일 필드 제약(null, 범위)은 Bean Validation, **구간 간 관계 검증은 도메인 객체**가 맡는다. 컨트롤러에 검증 로직을 두지 않는다 |
 | 인증 주체 | 컨트롤러가 `SecurityContext`에서 `userId`를 받는다. 경로에 `userId`를 넣지 않는다 |
+| 인증 주체가 DB에 없을 때 | **401**. 액세스 토큰은 30분간 무효화되지 않아 탈퇴 직후 토큰이 살아 있다(T-003a QA-4). `findById(userId).orElseThrow()`를 그대로 쓰면 이 경우가 500이 된다 |
 | 시각 주입 | `Clock`을 빈으로 주입받는다. 서비스가 `OffsetDateTime.now()`를 직접 부르지 않는다 |
 
 ## 4. 로직 검증 축 (신설)

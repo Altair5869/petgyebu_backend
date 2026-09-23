@@ -1,6 +1,7 @@
 package com.petgyebu.telo.auth;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -10,6 +11,8 @@ import com.petgyebu.telo.user.domain.AuthProvider;
 import com.petgyebu.telo.user.domain.User;
 import com.petgyebu.telo.user.repository.UserRepository;
 import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.MalformedJwtException;
+import io.jsonwebtoken.security.MacAlgorithm;
 import io.jsonwebtoken.security.Keys;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
@@ -20,9 +23,11 @@ import java.time.ZoneId;
 import java.util.Date;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
+import javax.crypto.SecretKey;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -66,6 +71,10 @@ class AccessTokenAuthenticationTest {
 
 	@Autowired
 	private MutableClock clock;
+
+	/** 서명 키 실물. 같은 키로 알고리즘만 바꿔 서명한 토큰을 만들어 보는 데 쓴다. */
+	@Value("${telo.auth.access-token-secret}")
+	private String secret;
 
 	private Long userId;
 
@@ -128,6 +137,68 @@ class AccessTokenAuthenticationTest {
 		clock.set(ISSUED_AT.plus(Duration.ofMinutes(30)).plusSeconds(1));
 		mockMvc.perform(get("/__test__/me").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
 				.andExpect(status().isUnauthorized());
+	}
+
+	@Test
+	@DisplayName("서명 없는 alg:none 토큰은 401 — 서명 검사를 건너뛰게 두지 않는다")
+	void unsignedTokenIsRejected() throws Exception {
+		String unsigned = Jwts.builder()
+				.subject(String.valueOf(userId))
+				.issuedAt(Date.from(ISSUED_AT))
+				.expiration(Date.from(ISSUED_AT.plus(Duration.ofMinutes(30))))
+				.compact();
+
+		mockMvc.perform(get("/__test__/me").header(HttpHeaders.AUTHORIZATION, "Bearer " + unsigned))
+				.andExpect(status().isUnauthorized());
+	}
+
+	@Test
+	@DisplayName("같은 키로 HS512 서명한 토큰은 거부되고 HS256은 통과한다 — 파서가 헤더 alg를 믿지 않는다")
+	void onlyHs256IsAccepted() {
+		// 이 검사는 HTTP 종단으로 볼 수 없다. 운영·테스트 키가 32바이트대라 HS512 서명이
+		// 길이 제약(RFC 7518 3.2: >= 512비트)에 먼저 걸려 토큰을 만들지조차 못한다.
+		// 위험은 키를 권장대로 64바이트로 늘리는 순간 열리므로, 그 조건을 여기서 만든다.
+		String longSecret = "x".repeat(64);
+		SecretKey key = Keys.hmacShaKeyFor(longSecret.getBytes(StandardCharsets.UTF_8));
+		TokenService service = new TokenService(longSecret, clock);
+
+		// 양방향으로 본다. 거부만 확인하면 "항상 거부"인 구현도 통과한다.
+		assertThat(service.parseUserId(signWith(key, Jwts.SIG.HS256))).isEqualTo(userId);
+
+		String hs512 = signWith(key, Jwts.SIG.HS512);
+		assertThatThrownBy(() -> service.parseUserId(hs512))
+				.isInstanceOf(MalformedJwtException.class);
+	}
+
+	@Test
+	@DisplayName("sub가 숫자가 아니면 401 — 서명이 맞아도 우리가 발급한 형식이 아니다")
+	void nonNumericSubjectIsRejected() throws Exception {
+		String token = Jwts.builder()
+				.subject("not-a-number")
+				.issuedAt(Date.from(ISSUED_AT))
+				.expiration(Date.from(ISSUED_AT.plus(Duration.ofMinutes(30))))
+				.signWith(Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8)), Jwts.SIG.HS256)
+				.compact();
+
+		mockMvc.perform(get("/__test__/me").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+				.andExpect(status().isUnauthorized());
+	}
+
+	@Test
+	@DisplayName("빈 토큰은 401이지 500이 아니다 — 여기만 JwtException이 아닌 IllegalArgumentException이 난다")
+	void emptyTokenIsRejected() throws Exception {
+		mockMvc.perform(get("/__test__/me").header(HttpHeaders.AUTHORIZATION, "Bearer "))
+				.andExpect(status().isUnauthorized());
+	}
+
+	/** 같은 본문을 알고리즘만 바꿔 서명한다. 알고리즘 외의 차이가 결과에 섞이지 않게 하려는 것이다. */
+	private String signWith(SecretKey key, MacAlgorithm algorithm) {
+		return Jwts.builder()
+				.subject(String.valueOf(userId))
+				.issuedAt(Date.from(ISSUED_AT))
+				.expiration(Date.from(ISSUED_AT.plus(Duration.ofMinutes(30))))
+				.signWith(key, algorithm)
+				.compact();
 	}
 
 	@Test
