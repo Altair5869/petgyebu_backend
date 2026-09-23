@@ -1,7 +1,7 @@
 # 트러블슈팅 기록
 
 - 관련 프로젝트: 반려동물 감정 기반 소비 관리 가계부 앱 (Java 25 / Spring Boot 4.0 / PostgreSQL 16)
-- 최종 갱신: 2026-09-22
+- 최종 갱신: 2026-09-23
 - 목적: 개발 과정에서 실제로 마주친 문제와 진단·해결 과정을 기록한다. 증상과 해결만이 아니라 **어떻게 원인에 도달했고 왜 그 방법을 골랐는지**를 남긴다.
 
 각 항목은 관련 PR 번호를 달았다. 실제 커밋과 CI 실행 기록으로 확인할 수 있다.
@@ -38,6 +38,7 @@
 | 22 | Spring Batch 6.0이 DataSource가 있어도 메타데이터를 DB에 쓰지 않는다 — Job은 `COMPLETED`로 끝난다 | **조용한 실패** / 메이저 버전 전환 | #23 |
 | 23 | FK 자식 컬럼에 인덱스가 없어 부모 삭제가 자식 테이블 전체를 훑는다 | **조용한 실패** / 설계 문서 누락 | #24 |
 | 24 | 비정규화한 `user_id`가 부모의 소유자와 어긋나도 DB가 막지 않는다 — 집계에 남의 데이터가 섞인다 | **조용한 실패** / 설계 결정 | #25 |
+| 25 | 인증 빈 하나를 추가했더니 무관해 보이는 스키마 테스트 25개가 컨텍스트 기동 실패로 깨졌다 | 부작용 / 설정 | — (T-003a, 미병합) |
 
 **가장 많이 나온 유형은 "조용한 실패"다.** 빌드도 기동도 성공하는데 기능만 비어 있는 경우가 12건이었다. 이 유형이 위험한 이유는 아래 마지막 절에 정리했다.
 
@@ -1561,7 +1562,7 @@ T-040에서 새로 생긴 주석 두 곳만 정정했다. 앞의 둘은 이 Task
 
 ### 조용한 실패가 가장 많았다
 
-24건 중 12건(3·4·9·10·11·17·18·19·20·22·23·24번)이 **빌드도 기동도 성공하는데 기능만 비어 있는** 유형이었다.
+25건 중 12건(3·4·9·10·11·17·18·19·20·22·23·24번)이 **빌드도 기동도 성공하는데 기능만 비어 있는** 유형이었다.
 
 | 사례 | 겉보기 | 실제 |
 |---|---|---|
@@ -1816,3 +1817,59 @@ DETAIL: Key (account_id, user_id)=(1, 2) is not present in table "accounts".
 | `reward_grants.budget_period_id` | CASCADE | 탈퇴 시 예산 기간 수(연 12개)만큼 — 셋 중 최악 |
 
 **마이그레이션 파일의 주석은 고치지 않았다.** `V202609221500__add_missing_fk_indexes.sql`은 이미 병합됐고, 같은 날 추가한 불변성 가드가 병합된 마이그레이션의 수정을 막는다. 파일을 고치면 적용된 DB에서 checksum 불일치로 기동이 실패한다. 정정은 이 항목과 `docs/09-db-design.md` 0장에 둔다.
+
+---
+
+## 25. 인증 빈 하나를 추가했더니 무관해 보이는 스키마 테스트 25개가 한꺼번에 깨졌다
+
+**증상**
+
+T-003a(액세스 토큰)에서 `TokenService`를 추가하고 해당 테스트 5개가 전부 통과한 뒤 `./gradlew build`를 돌렸더니, 토큰과 아무 상관 없는 테스트들이 무더기로 깨졌다.
+
+```
+accounts 스키마 제약 검증 > 컬럼 타입이 설계와 일치한다 ... FAILED
+budget_periods·status_thresholds 스키마 제약 검증 > ... FAILED
+Spring Batch 메타 테이블 위에서 Job이 실제로 실행된다 > ... FAILED
+```
+
+**진단**
+
+실패 목록이 특정 도메인에 몰려 있지 않고 **Testcontainers를 쓰는 테스트 전부**였다. 스키마를 건드리지 않았으니 테스트 본문의 문제가 아니라 컨텍스트 기동 문제라고 보고 JUnit XML의 스택트레이스를 열었다.
+
+```
+Failed to load ApplicationContext for [... BudgetSchemaTest ..., activeProfiles = []]
+Caused by: BeanCreationException: Error creating bean with name 'tokenService'
+Caused by: PlaceholderResolutionException: Could not resolve placeholder
+  'TELO_ACCESS_TOKEN_SECRET' in value "${TELO_ACCESS_TOKEN_SECRET}"
+  <-- "${telo.auth.access-token-secret}"
+```
+
+`activeProfiles = []`가 결정적이었다. 토큰 테스트는 `@ActiveProfiles("local")`이라 `application-local.yaml`의 더미 키를 읽어 통과했지만, 스키마 테스트들은 **프로필을 지정하지 않아 base `application.yaml`만 읽는다.** 거기에는 기본값 없는 `${TELO_ACCESS_TOKEN_SECRET}`만 있었다.
+
+**원인**
+
+서명 키에 기본값을 일부러 주지 않았다. 기본값을 두면 운영에서 주입을 빠뜨렸을 때 **저장소에 공개된 키로 토큰을 찍어내며 조용히 정상 동작**하기 때문이다. 그 판단 자체는 유지할 값이었지만, 키를 더미 값으로 채워 둔 곳이 `local` 프로필뿐이라 프로필 없이 도는 테스트에는 값이 닿지 않았다.
+
+`TokenService`는 `@Service`라 컨텍스트 기동 시 항상 만들어진다. **토큰을 전혀 쓰지 않는 테스트도 이 빈의 생성 실패에 함께 끌려간다.**
+
+**해결**
+
+`build.gradle`의 `test` 블록에서 **운영과 같은 경로인 환경변수**로 더미 키를 넣었다. 테스트용 프로퍼티 파일을 새로 두는 방법도 있었지만, `src/test/resources/application.yaml`은 클래스패스에서 main의 같은 이름 파일을 통째로 가려 base 설정이 테스트에서만 달라지는 함정을 만든다. 환경변수는 실제 주입 경로와 같아서 그 경로가 동작한다는 것까지 겸사겸사 확인된다.
+
+```gradle
+environment 'TELO_ACCESS_TOKEN_SECRET', 'test-only-dummy-hs256-signing-key-32b+'
+```
+
+base `application.yaml`은 기본값 없이 그대로 뒀다. 기동 실패로 막는 성질을 잃지 않는 것이 이 항목의 핵심이다.
+
+**검증**
+
+- 고치기 전: `./gradlew build` → 25 failed (컨텍스트 기동 실패)
+- 고친 뒤: `./gradlew build` → 152 tests, 0 failed
+- 되돌리면: `environment` 줄을 지우면 같은 25개가 같은 `PlaceholderResolutionException`으로 다시 깨진다
+
+**배운 것**
+
+**기동 시점에 실패하도록 만든 설정은 기동하는 모든 경로를 함께 봐야 한다.** 새 필수 설정을 추가할 때 실제로 늘어나는 것은 "그 기능을 쓰는 경로"가 아니라 "컨텍스트를 띄우는 모든 경로"다.
+
+그리고 **기능 테스트만 돌려 보고 끝내면 이런 것이 남는다.** 토큰 테스트 5개는 `local` 프로필이라 처음부터 끝까지 초록이었다. 전체 빌드를 돌리지 않았다면 이 상태로 커밋했을 것이다.

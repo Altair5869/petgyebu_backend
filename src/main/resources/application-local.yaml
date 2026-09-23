@@ -22,3 +22,9 @@ management:
     # Upstash 연결이 붙는 시점에 이 설정을 제거한다.
     redis:
       enabled: false
+
+telo:
+  auth:
+    # 로컬·테스트 전용 더미 키다. 이 파일은 저장소에 그대로 들어가므로 공개된 값으로 취급한다.
+    # 운영·스테이징은 base 설정의 ${TELO_ACCESS_TOKEN_SECRET}로만 주입한다.
+    access-token-secret: "local-only-dummy-hs256-signing-key-32b+"
