@@ -112,7 +112,6 @@ T-003a는 `TokenService`(서비스 계층)까지만이고 **발급용 HTTP 엔�
 
 | | ID | 제목 | 브랜치 | 완료 기준 | 의존 | 차단 |
 | [x] | T-031 | `push_device_tokens`·`push_logs` 스키마 | `feature/F-VZFPVW-schema` | ✅ 완료. QA PASS 10 / FIX 3 / REDO 0 | T-023 | #22 |
-| [ ] | T-031 | `push_device_tokens`·`push_logs` 스키마 | `feature/F-VZFPVW-schema` | 마이그레이션 적용. `(budget_period_id, threshold_type)` 유니크 동작 | T-023 | — |
 | [ ] | T-032 | 상태 계산과 메인 홈 API | `feature/F-VZFPVW-home` | 사용률→6단계 매핑. 상태 문구·사용률·남은 예산 또는 초과 금액이 함께 내려온다. T-024 집계 함수 사용 | T-026, T-027 | — |
 | [ ] | T-033 | 상태 설명·범례 API | `feature/F-VZFPVW-legend` | 6단계 구간과 의미가 내려온다 | T-032 | — |
 | [ ] | T-034 | 디바이스 토큰 등록·해제 API | `feature/F-VZFPVW-device-token` | 토큰 upsert가 동작하고 같은 토큰의 소유자 이전이 처리된다 | T-031 | — |
